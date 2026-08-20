@@ -2,6 +2,7 @@ package com.civicos.casefile.domain;
 
 import java.time.Instant;
 
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.common.persistence.AbstractAuditableEntity;
 import com.civicos.road.domain.RoadSegment;
 import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
@@ -66,6 +67,22 @@ public class CivicCase extends AbstractAuditableEntity {
 	@Version
 	@Column(nullable = false)
 	private long version;
+
+	public CivicCase() {
+	}
+
+	public static CivicCase create(
+			String caseNumber,
+			Source source,
+			Priority priority,
+			RoadSegment roadSegment) {
+		CivicCase civicCase = new CivicCase();
+		civicCase.caseNumber = ValidationRules.requiredText(caseNumber, "Case number");
+		civicCase.source = ValidationRules.required(source, "Case source");
+		civicCase.priority = ValidationRules.required(priority, "Case priority");
+		civicCase.roadSegment = ValidationRules.required(roadSegment, "Road segment");
+		return civicCase;
+	}
 
 	public String getCaseNumber() { return caseNumber; }
 	public Source getSource() { return source; }

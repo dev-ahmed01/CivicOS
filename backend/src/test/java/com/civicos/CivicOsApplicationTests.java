@@ -28,6 +28,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationContext;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.repository.Repository;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -58,6 +59,9 @@ import com.civicos.approval.domain.Approval;
 import com.civicos.audit.application.AuditQueryService;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.casefile.domain.CivicCase;
+import com.civicos.casefile.application.CitizenObservationService;
+import com.civicos.casefile.application.CitizenValidationDecision;
+import com.civicos.casefile.application.CreateCitizenObservationCommand;
 import com.civicos.common.domain.DomainConflictException;
 import com.civicos.common.domain.DomainValidationException;
 import com.civicos.common.domain.StaleEntityVersionException;
@@ -217,6 +221,9 @@ class CivicOsApplicationTests {
 	private ConflictDetectionService conflictDetectionService;
 
 	@Autowired
+	private CitizenObservationService citizenObservationService;
+
+	@Autowired
 	private ConflictResolutionService conflictResolutionService;
 
 	@Autowired
@@ -355,6 +362,7 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.components.schemas.ApiError").exists())
 				.andExpect(jsonPath("$.components.schemas.PagedResponseInterventionResponse").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions'].get.parameters").isArray())
+				.andExpect(jsonPath("$.paths['/api/v1/observations/{observationId}/evidence'].post").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/actions/{action}'].post.responses['409'].content['application/json'].schema['$ref']")
 						.value("#/components/schemas/ApiError"));
 	}
@@ -948,6 +956,71 @@ class CivicOsApplicationTests {
 					conflictId, Conflict.Status.DISMISSED, currentVersion,
 					"Stale second decision", "phase-12-stale-conflict-resolution"))
 					.isInstanceOf(StaleEntityVersionException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void citizenObservationApiBoundaryPreservesCitizenControlAndOfficialWorkflow() {
+		WorkflowFixture fixture = createWorkflowFixtureAt(
+				"DRAFT", "LINESTRING(80.10 16.10, 80.11 16.11)",
+				"2029-04-01T08:00:00Z", "2029-04-03T08:00:00Z", "ROADWORK");
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "CITIZEN", "OBSERVATION_CREATE");
+		UUID observationId;
+		try {
+			var created = citizenObservationService.create(
+					new CreateCitizenObservationCommand(
+							"REPEAT_EXCAVATION", "The restored road has been cut again.",
+							16.10, 80.10, fixture.roadSegmentId()),
+					"phase-14-citizen-observation");
+			observationId = created.observationId();
+			assertThat(created.trackingId()).startsWith("CASE-CIT-");
+			assertThat(created.category()).isEqualTo("REPEAT_EXCAVATION");
+			assertThat(created.publicStatus()).isEqualTo("REPORT_RECEIVED");
+			assertThat(created.detectedRoad().roadSegmentId()).isEqualTo(fixture.roadSegmentId());
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ? and action = 'CITIZEN_OBSERVATION_SUBMITTED'",
+					Integer.class, observationId)).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "CITIZEN", "OBSERVATION_VIEW_OWN");
+		try {
+			assertThat(citizenObservationService.mine(PageRequest.of(0, 20)).getContent())
+					.extracting(item -> item.observationId())
+					.contains(observationId);
+			jdbcTemplate.update(
+					"update civic_cases set status = 'CLOSED', closed_at = now() where id = (select case_id from citizen_observations where id = ?)",
+					observationId);
+			assertThat(citizenObservationService.byId(observationId).publicStatus()).isEqualTo("CLOSED");
+			jdbcTemplate.update(
+					"update civic_cases set status = 'OPEN', closed_at = null where id = (select case_id from citizen_observations where id = ?)",
+					observationId);
+			assertThat(citizenObservationService.byId(observationId).description())
+					.isEqualTo("The restored road has been cut again.");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		jdbcTemplate.update(
+				"update citizen_observations set status = 'RESOLVED' where id = ?", observationId);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "CITIZEN", "CITIZEN_VALIDATION_CREATE");
+		try {
+			var validation = citizenObservationService.validateResolution(
+					observationId, CitizenValidationDecision.STILL_UNRESOLVED,
+					"The trench edge is still unsafe.", "phase-14-citizen-validation");
+			assertThat(validation.authoritativeWorkflowChanged()).isFalse();
+			assertThat(jdbcTemplate.queryForObject(
+					"select source from verifications where id = ?",
+					String.class, validation.verificationId())).isEqualTo("CITIZEN");
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from citizen_observations where id = ?",
+					String.class, observationId)).isEqualTo("RESOLVED");
 		} finally {
 			SecurityContextHolder.clearContext();
 		}

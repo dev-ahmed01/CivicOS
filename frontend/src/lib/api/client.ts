@@ -61,6 +61,29 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   return response.json() as Promise<T>
 }
 
+export async function apiMultipartRequest<T>(
+  path: string,
+  formData: FormData,
+  accessToken: string,
+  idempotencyKey: string,
+): Promise<T> {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorBody(response))
+  }
+
+  return response.json() as Promise<T>
+}
+
 async function readErrorBody(response: Response): Promise<ApiErrorBody> {
   try {
     return await response.json() as ApiErrorBody

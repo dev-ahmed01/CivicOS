@@ -7,6 +7,8 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.locationtech.jts.geom.Point;
 
 import com.civicos.common.persistence.AbstractAuditableEntity;
+import com.civicos.common.validation.GeometryRules;
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.road.domain.RoadSegment;
 import com.civicos.user.domain.User;
 
@@ -58,6 +60,26 @@ public class CitizenObservation extends AbstractAuditableEntity {
 
 	@Column(name = "ai_confidence", precision = 5, scale = 4)
 	private BigDecimal aiConfidence;
+
+	protected CitizenObservation() {
+	}
+
+	public static CitizenObservation create(
+			CivicCase civicCase,
+			User submittedBy,
+			String category,
+			String description,
+			Point location,
+			RoadSegment roadSegment) {
+		CitizenObservation observation = new CitizenObservation();
+		observation.civicCase = ValidationRules.required(civicCase, "Case");
+		observation.submittedBy = ValidationRules.required(submittedBy, "Submitting citizen");
+		observation.category = ValidationRules.requiredText(category, "Observation category");
+		observation.description = ValidationRules.requiredText(description, "Observation description");
+		observation.location = GeometryRules.validWgs84(location, "Observation location");
+		observation.roadSegment = ValidationRules.required(roadSegment, "Road segment");
+		return observation;
+	}
 
 	public CivicCase getCivicCase() { return civicCase; }
 	public User getSubmittedBy() { return submittedBy; }

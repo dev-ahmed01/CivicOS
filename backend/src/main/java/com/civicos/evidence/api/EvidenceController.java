@@ -37,7 +37,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 @RestController
-@RequestMapping("/api/v1/evidence")
+@RequestMapping("/api/v1")
 @Tag(name = "Evidence")
 public class EvidenceController {
 
@@ -49,7 +49,7 @@ public class EvidenceController {
 		this.idempotencyService = idempotencyService;
 	}
 
-	@PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	@PostMapping(value = "/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
 	@ResponseStatus(HttpStatus.CREATED)
 	@Operation(summary = "Upload evidence with trusted server-side checksum and metadata validation")
 	public EvidenceResult upload(
@@ -57,16 +57,27 @@ public class EvidenceController {
 			@Valid @RequestPart("metadata") UploadRequest body,
 			@RequestPart("file") MultipartFile file,
 			HttpServletRequest request) {
-		byte[] content = content(file);
-		UploadFingerprint fingerprint = new UploadFingerprint(body, sha256(content));
-		return idempotencyService.execute(idempotencyKey, "EVIDENCE_UPLOAD", fingerprint,
-				EvidenceResult.class, () -> evidenceService.upload(new EvidenceUploadCommand(
-						body.targetType(), body.targetId(), body.type(), file.getOriginalFilename(),
-						file.getContentType(), body.capturedAt(), body.latitude(), body.longitude(),
-						body.metadata()), content, CorrelationIdFilter.requestId(request)));
+		return uploadEvidence(idempotencyKey, "EVIDENCE_UPLOAD", body, file, request);
 	}
 
-	@PostMapping("/{evidenceId}/submit")
+	@PostMapping(value = "/observations/{observationId}/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	@ResponseStatus(HttpStatus.CREATED)
+	@Operation(summary = "Upload citizen evidence to the observation identified by the route")
+	public EvidenceResult uploadCitizenObservationEvidence(
+			@PathVariable UUID observationId,
+			@RequestHeader("Idempotency-Key") String idempotencyKey,
+			@Valid @RequestPart("metadata") CitizenObservationUploadRequest body,
+			@RequestPart("file") MultipartFile file,
+			HttpServletRequest request) {
+		UploadRequest upload = new UploadRequest(
+				"CITIZEN_OBSERVATION", observationId, body.type(), body.capturedAt(),
+				body.latitude(), body.longitude(), body.metadata());
+		return uploadEvidence(
+				idempotencyKey, "CITIZEN_OBSERVATION_EVIDENCE_UPLOAD:" + observationId,
+				upload, file, request);
+	}
+
+	@PostMapping("/evidence/{evidenceId}/submit")
 	public EvidenceResult submit(
 			@PathVariable UUID evidenceId,
 			@RequestHeader("Idempotency-Key") String idempotencyKey,
@@ -77,7 +88,7 @@ public class EvidenceController {
 						body.expectedVersion(), body.reason(), CorrelationIdFilter.requestId(request)));
 	}
 
-	@PostMapping("/{evidenceId}/review")
+	@PostMapping("/evidence/{evidenceId}/review")
 	public EvidenceResult review(
 			@PathVariable UUID evidenceId,
 			@RequestHeader("Idempotency-Key") String idempotencyKey,
@@ -87,6 +98,21 @@ public class EvidenceController {
 				EvidenceResult.class, () -> evidenceService.review(evidenceId,
 						new EvidenceReviewCommand(body.decision(), body.reason(), body.expectedVersion()),
 						CorrelationIdFilter.requestId(request)));
+	}
+
+	private EvidenceResult uploadEvidence(
+			String idempotencyKey,
+			String operation,
+			UploadRequest body,
+			MultipartFile file,
+			HttpServletRequest request) {
+		byte[] content = content(file);
+		UploadFingerprint fingerprint = new UploadFingerprint(body, sha256(content));
+		return idempotencyService.execute(idempotencyKey, operation, fingerprint,
+				EvidenceResult.class, () -> evidenceService.upload(new EvidenceUploadCommand(
+						body.targetType(), body.targetId(), body.type(), file.getOriginalFilename(),
+						file.getContentType(), body.capturedAt(), body.latitude(), body.longitude(),
+						body.metadata()), content, CorrelationIdFilter.requestId(request)));
 	}
 
 	private byte[] content(MultipartFile file) {
@@ -108,6 +134,14 @@ public class EvidenceController {
 	public record UploadRequest(
 			@NotBlank String targetType,
 			@NotNull UUID targetId,
+			@NotNull Evidence.Type type,
+			Instant capturedAt,
+			BigDecimal latitude,
+			BigDecimal longitude,
+			Map<String, Object> metadata) {
+	}
+
+	public record CitizenObservationUploadRequest(
 			@NotNull Evidence.Type type,
 			Instant capturedAt,
 			BigDecimal latitude,

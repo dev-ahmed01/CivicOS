@@ -60,6 +60,21 @@ public class Verification extends AbstractCreatedEntity {
 		return verification;
 	}
 
+	public static Verification citizen(
+			UUID observationId,
+			Result result,
+			User citizen,
+			String reason) {
+		Verification verification = new Verification();
+		verification.targetType = "CITIZEN_OBSERVATION";
+		verification.targetId = ValidationRules.required(observationId, "Citizen observation");
+		verification.source = Source.CITIZEN;
+		verification.result = ValidationRules.required(result, "Citizen validation result");
+		verification.submittedBy = ValidationRules.required(citizen, "Citizen");
+		verification.reason = reason == null || reason.isBlank() ? null : reason.strip();
+		return verification;
+	}
+
 	public String getTargetType() { return targetType; }
 	public UUID getTargetId() { return targetId; }
 	public Source getSource() { return source; }
