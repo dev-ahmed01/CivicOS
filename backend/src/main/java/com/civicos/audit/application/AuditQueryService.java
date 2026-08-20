@@ -15,6 +15,8 @@ import com.civicos.audit.repository.AuditEventRepository;
 import com.civicos.auth.application.AuthorizationService;
 import com.civicos.auth.domain.PermissionCode;
 import com.civicos.auth.security.CivicPrincipal;
+import com.civicos.auth.domain.SystemRole;
+import org.springframework.security.access.AccessDeniedException;
 import com.civicos.common.validation.ValidationRules;
 
 @Service
@@ -31,6 +33,15 @@ public class AuditQueryService {
 		this.auditEventRepository = auditEventRepository;
 		this.authorizationService = authorizationService;
 		this.visibilityPolicy = visibilityPolicy;
+	}
+
+	@Transactional(readOnly = true)
+	public Page<AuditEventResult> list(Pageable pageable) {
+		CivicPrincipal principal = principal();
+		if (!principal.roles().contains(SystemRole.ADMIN.name())) {
+			throw new AccessDeniedException("Only administrators can view the global audit stream.");
+		}
+		return auditEventRepository.findAll(pageable).map(this::result);
 	}
 
 	@Transactional(readOnly = true)

@@ -396,6 +396,9 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.paths['/api/v1/evidence'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/inspections'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/inspections/{inspectionId}'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/admin/users'].post").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/admin/configuration'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/audit-events'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/dependencies'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/slas'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/conflicts/{conflictId}/recommendations'].get").exists())
@@ -417,6 +420,43 @@ class CivicOsApplicationTests {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("DOMAIN_VALIDATION_FAILED"))
 				.andExpect(jsonPath("$.requestId").value("phase-12-page-limit"));
+	}
+
+	@Test
+	void administratorCanInviteGovernedUserAndReadSafeConfiguration() throws Exception {
+		TestUser admin = createUser(
+				"ADMIN", "ACTIVE", "USER_VIEW", "USER_CREATE", "USER_UPDATE",
+				"ROLE_ASSIGN", "AGENCY_ASSIGN", "POLICY_VIEW", "POLICY_MANAGE", "AUDIT_VIEW");
+		String accessToken = login(admin).get("accessToken").asText();
+		String email = "phase18-invited-" + UUID.randomUUID() + "@civicos.test";
+
+		mockMvc.perform(post("/api/v1/admin/users")
+					.header("Authorization", "Bearer " + accessToken)
+					.header("Idempotency-Key", UUID.randomUUID())
+					.header("X-Request-Id", "phase-18-user-invite")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(Map.of(
+							"fullName", "Phase 18 Invited User",
+							"email", email,
+							"status", "INVITED",
+							"roleCodes", List.of("ADMIN"),
+							"reason", "Phase 18 governed invitation"))))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.email").value(email))
+				.andExpect(jsonPath("$.status").value("INVITED"))
+				.andExpect(jsonPath("$.roles[0]").value("ADMIN"));
+
+		mockMvc.perform(get("/api/v1/admin/configuration")
+					.header("Authorization", "Bearer " + accessToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.configurationSource").value("ENVIRONMENT"))
+				.andExpect(jsonPath("$.runtimeMutationSupported").value(false))
+				.andExpect(jsonPath("$.ai.enabled").isBoolean())
+				.andExpect(jsonPath("$.jwtSecret").doesNotExist());
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from audit_events where action = 'USER_INVITED' and entity_id = (select id from users where email = ?)",
+				Integer.class, email)).isEqualTo(1);
 	}
 
 	@Test

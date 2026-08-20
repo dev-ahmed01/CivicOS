@@ -31,6 +31,17 @@ public class AuditController {
 		this.pageRequestFactory = pageRequestFactory;
 	}
 
+	@GetMapping
+	public PagedResponse<AuditEventResult> list(
+			@RequestParam(defaultValue = "0") int page,
+			@RequestParam(defaultValue = "20") int size,
+			@RequestParam(defaultValue = "occurredAt,desc") String sort,
+			HttpServletRequest request) {
+		return PagedResponse.from(auditQueryService.list(pageRequestFactory.create(
+				page, size, sort, Set.of("occurredAt", "action", "entityType"))),
+				CorrelationIdFilter.requestId(request));
+	}
+
 	@GetMapping("/{eventId}")
 	public AuditEventResult byEventId(@PathVariable UUID eventId) {
 		return auditQueryService.byEventId(eventId);
