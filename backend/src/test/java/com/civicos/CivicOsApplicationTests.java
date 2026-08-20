@@ -88,6 +88,7 @@ import com.civicos.evidence.domain.Evidence;
 import com.civicos.evidence.storage.FileStorageService;
 import com.civicos.inspection.application.CompleteInspectionCommand;
 import com.civicos.inspection.application.InspectionService;
+import com.civicos.inspection.application.InspectionQueryService;
 import com.civicos.inspection.domain.Inspection;
 import com.civicos.intervention.application.CreateInterventionCommand;
 import com.civicos.intervention.application.InterventionManagementService;
@@ -261,6 +262,9 @@ class CivicOsApplicationTests {
 	private InspectionService inspectionService;
 
 	@Autowired
+	private InspectionQueryService inspectionQueryService;
+
+	@Autowired
 	private VerificationService verificationService;
 
 	@Autowired
@@ -390,6 +394,8 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.paths['/api/v1/observations/{observationId}/evidence'].post").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/approval-requests'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/evidence'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/inspections'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/inspections/{inspectionId}'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/dependencies'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/slas'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/conflicts/{conflictId}/recommendations'].get").exists())
@@ -1456,6 +1462,39 @@ class CivicOsApplicationTests {
 			assertThatThrownBy(() -> inspectionService.schedule(
 					selfInspection.interventionId(), "Self inspection", "phase-9-self-inspection"))
 					.isInstanceOf(SeparationOfDutiesException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void inspectorQueriesExposeOnlyAssignedInspections() {
+		WorkflowFixture assignedFixture = createWorkflowFixture("VERIFICATION_PENDING", false);
+		UUID assignedInspector = createWorkflowUser(assignedFixture.agencyId());
+		authenticateWorkflowActor(
+				assignedInspector, assignedFixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
+		var assigned = inspectionService.schedule(
+				assignedFixture.interventionId(), "Assigned field inspection", "phase-17-assigned");
+
+		WorkflowFixture otherFixture = createWorkflowFixture("VERIFICATION_PENDING", false);
+		UUID otherInspector = createWorkflowUser(otherFixture.agencyId());
+		authenticateWorkflowActor(
+				otherInspector, otherFixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
+		var outsideAssignment = inspectionService.schedule(
+				otherFixture.interventionId(), "Other field inspection", "phase-17-other");
+
+		authenticateWorkflowActor(
+				assignedInspector, assignedFixture.agencyId(), "INSPECTOR", "INSPECTION_VIEW");
+		try {
+			var visible = inspectionQueryService.list(PageRequest.of(0, 20));
+			assertThat(visible.getContent()).extracting(item -> item.id())
+					.contains(assigned.inspectionId())
+					.doesNotContain(outsideAssignment.inspectionId());
+			assertThat(inspectionQueryService.byId(assigned.inspectionId()).roadSegmentName())
+					.isNotBlank();
+			assertThatThrownBy(() -> inspectionQueryService.byId(outsideAssignment.inspectionId()))
+					.isInstanceOf(AccessDeniedException.class)
+					.hasMessageContaining("assigned inspector");
 		} finally {
 			SecurityContextHolder.clearContext();
 		}

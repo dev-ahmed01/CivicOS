@@ -105,6 +105,14 @@ export function resolveWorkspace(pathname: string): ResolvedWorkspace {
           found: true,
         }
       }
+      if (workspace.role === 'inspector' && pathname.startsWith('/app/inspector/inspections/')) {
+        return {
+          workspace,
+          route: workspace.routes.find(({ path }) => path === '/app/inspector/inspections') ?? workspace.routes[0],
+          requestedPath: pathname,
+          found: true,
+        }
+      }
       if (workspace.role === 'coordinator') {
         const coordinatorRoute = workspace.routes.find(({ path }) => pathname.startsWith(path))
         if (coordinatorRoute) {

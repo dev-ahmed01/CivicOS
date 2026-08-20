@@ -9,6 +9,8 @@ import { CitizenWorkspace } from './features/citizen/CitizenWorkspace'
 import { readCitizenAccessToken } from './features/citizen/session'
 import { CoordinatorWorkspace } from './features/coordinator/CoordinatorWorkspace'
 import { readCoordinatorAccessToken } from './features/coordinator/session'
+import { InspectorWorkspace } from './features/inspector/InspectorWorkspace'
+import { readInspectorAccessToken } from './features/inspector/session'
 
 type AppProps = {
   pathname?: string
@@ -25,6 +27,9 @@ function App({ pathname = window.location.pathname, accessToken }: AppProps) {
   )
   const [coordinatorToken, setCoordinatorToken] = useState<string | null>(() =>
     accessToken === undefined ? readCoordinatorAccessToken() : accessToken,
+  )
+  const [inspectorToken, setInspectorToken] = useState<string | null>(() =>
+    accessToken === undefined ? readInspectorAccessToken() : accessToken,
   )
 
   return (
@@ -46,6 +51,12 @@ function App({ pathname = window.location.pathname, accessToken }: AppProps) {
           accessToken={coordinatorToken}
           route={route}
           onAuthenticated={setCoordinatorToken}
+        />
+      ) : route.workspace.role === 'inspector' ? (
+        <InspectorWorkspace
+          accessToken={inspectorToken}
+          route={route}
+          onAuthenticated={setInspectorToken}
         />
       ) : (
         <WorkspacePage route={route} />

@@ -23,8 +23,8 @@ describe('CivicOS operational shell', () => {
   it('provides text semantics for status and workflow information', () => {
     render(<App pathname="/app/inspector/verification" />)
 
-    expect(screen.getByRole('status')).toHaveTextContent('Foundation ready')
-    expect(screen.getByText('Determined by backend assignment')).toBeInTheDocument()
-    expect(screen.getByText('Validated and executed by backend')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /record what is physically present, with proof/i })).toBeInTheDocument()
+    expect(screen.getByText(/only assigned inspections are visible/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
   })
 })

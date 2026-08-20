@@ -1,0 +1,51 @@
+.inspector-access-layout, .inspector-page-heading, .inspection-card, .start-inspection, .verification-card .panel-header { display: flex; gap: var(--space-6); justify-content: space-between; align-items: flex-start; }
+.inspector-access-layout { min-height: 65vh; align-items: center; }
+.inspector-access-intro { max-width: 40rem; }
+.inspector-access-intro h1, .inspector-page-heading h1 { color: var(--color-text-strong); font-size: clamp(2rem, 6vw, 3.5rem); letter-spacing: -.04em; line-height: 1.04; margin: var(--space-2) 0; }
+.inspector-access-intro p, .inspector-page-heading p { color: var(--color-text-muted); line-height: 1.65; }
+.inspector-access-layout > form { width: min(100%, 28rem); }
+.inspector-page-heading { margin-bottom: var(--space-6); }
+.inspector-page-heading > div { max-width: 48rem; }
+.inspector-form-stack { display: grid; gap: var(--space-4); }
+.inspector-form-stack label:not(.check-row) { display: grid; gap: var(--space-2); color: var(--color-text-strong); font-weight: 700; }
+.inspector-form-stack input, .inspector-form-stack select, .inspector-form-stack textarea { width: 100%; border: 1px solid var(--color-border); border-radius: .65rem; background: var(--color-surface); color: var(--color-text-strong); padding: .8rem; font: inherit; }
+.inspector-form-stack input:focus-visible, .inspector-form-stack select:focus-visible, .inspector-form-stack textarea:focus-visible, .inspection-steps a:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+.inspector-alert, .inspector-success { padding: var(--space-3); border-radius: .65rem; border: 1px solid; }
+.inspector-alert { color: var(--color-danger); background: #fff3f1; }
+.inspector-success { color: #146b45; background: #edf9f2; }
+.inspector-card-list, .verification-list { display: grid; gap: var(--space-4); }
+.inspection-card, .inspector-evidence-card { border-top: 1px solid var(--color-border); padding: var(--space-5) 0; }
+.inspection-card:first-child, .inspector-evidence-card:first-child { border-top: 0; }
+.inspection-card h3, .inspector-evidence-card h3 { margin: .35rem 0; }
+.inspection-card h3 a { color: var(--color-text-strong); }
+.inspection-card p, .inspector-evidence-card p { color: var(--color-text-muted); }
+.inspection-card-state { min-width: 15rem; display: grid; justify-items: end; gap: var(--space-3); text-align: right; }
+.inspection-steps { position: sticky; top: 0; z-index: 2; display: flex; gap: var(--space-2); overflow-x: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 999px; padding: .4rem; margin-bottom: var(--space-5); }
+.inspection-steps a { color: var(--color-text-strong); padding: .55rem .85rem; white-space: nowrap; text-decoration: none; }
+.inspection-location, #expected-work, #checklist, #evidence > section { margin-bottom: var(--space-5); }
+.inspection-location svg { width: 100%; height: auto; color: var(--color-accent); margin: var(--space-4) 0; }
+.inspection-location svg rect { fill: #edf5f3; }
+.provenance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.provenance-grid div { min-width: 0; padding: var(--space-3); background: var(--color-surface-subtle); border-radius: .6rem; }
+.provenance-grid dt { color: var(--color-text-muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; }
+.provenance-grid dd { margin: .3rem 0 0; overflow-wrap: anywhere; }
+.provenance-grid code { white-space: normal; overflow-wrap: anywhere; }
+.start-inspection { margin-bottom: var(--space-5); align-items: center; }
+.check-row { display: flex; gap: var(--space-3); align-items: flex-start; font-weight: 650; }
+.check-row input { width: 1.25rem; height: 1.25rem; margin-top: .1rem; }
+.inspector-evidence-card { display: grid; grid-template-columns: 1fr auto; gap: var(--space-4); }
+.inspector-evidence-card .provenance-grid { grid-column: 1 / -1; }
+.verification-boundary-note, .ai-advisory { display: flex; gap: var(--space-3); border-left: .25rem solid var(--color-accent); background: var(--color-surface-subtle); padding: var(--space-4); margin-bottom: var(--space-5); }
+.verification-boundary-note span, .ai-advisory span { color: var(--color-text-muted); }
+.verification-card { margin-bottom: var(--space-5); }
+.expected-observed { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin: var(--space-4) 0; }
+.expected-observed section { padding: var(--space-4); border: 1px solid var(--color-border); border-radius: .75rem; }
+
+@media (max-width: 760px) {
+  .inspector-access-layout, .inspector-page-heading, .inspection-card, .start-inspection { flex-direction: column; }
+  .inspector-access-layout > form, .inspection-card-state { width: 100%; min-width: 0; }
+  .inspection-card-state { justify-items: start; text-align: left; }
+  .provenance-grid, .expected-observed { grid-template-columns: 1fr; }
+  .inspection-steps { border-radius: .75rem; }
+  .verification-boundary-note, .ai-advisory { flex-direction: column; }
+}

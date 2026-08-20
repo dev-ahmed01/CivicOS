@@ -3,6 +3,7 @@ package com.civicos.inspection.api;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -13,8 +14,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.civicos.common.web.ApiIdempotencyService;
 import com.civicos.common.web.CorrelationIdFilter;
+import com.civicos.common.web.PageRequestFactory;
+import com.civicos.common.web.PagedResponse;
 import com.civicos.inspection.application.CompleteInspectionCommand;
 import com.civicos.inspection.application.InspectionResult;
+import com.civicos.inspection.application.InspectionQueryService;
 import com.civicos.inspection.application.InspectionService;
 import com.civicos.inspection.domain.Inspection;
 
@@ -31,11 +35,37 @@ import jakarta.validation.constraints.NotNull;
 public class InspectionController {
 
 	private final InspectionService inspectionService;
+	private final InspectionQueryService queryService;
 	private final ApiIdempotencyService idempotencyService;
+	private final PageRequestFactory pageRequestFactory;
 
-	public InspectionController(InspectionService inspectionService, ApiIdempotencyService idempotencyService) {
+	public InspectionController(
+			InspectionService inspectionService,
+			InspectionQueryService queryService,
+			ApiIdempotencyService idempotencyService,
+			PageRequestFactory pageRequestFactory) {
 		this.inspectionService = inspectionService;
+		this.queryService = queryService;
 		this.idempotencyService = idempotencyService;
+		this.pageRequestFactory = pageRequestFactory;
+	}
+
+	@GetMapping("/inspections")
+	@Operation(summary = "List inspections visible to the actor; inspectors receive only assigned work")
+	public PagedResponse<InspectionResponse> list(
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "0") int page,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "20") int size,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "createdAt,desc") String sort,
+			HttpServletRequest request) {
+		return PagedResponse.from(queryService.list(pageRequestFactory.create(
+				page, size, sort, java.util.Set.of("createdAt", "status", "startedAt", "completedAt"))),
+				CorrelationIdFilter.requestId(request));
+	}
+
+	@GetMapping("/inspections/{inspectionId}")
+	@Operation(summary = "Get an assigned inspection with authoritative location and work context")
+	public InspectionResponse byId(@PathVariable UUID inspectionId) {
+		return queryService.byId(inspectionId);
 	}
 
 	@PostMapping("/interventions/{interventionId}/inspections")

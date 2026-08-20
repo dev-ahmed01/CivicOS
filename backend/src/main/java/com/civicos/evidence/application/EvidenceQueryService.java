@@ -19,6 +19,8 @@ import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.evidence.api.EvidenceResponse;
 import com.civicos.evidence.domain.Evidence;
 import com.civicos.evidence.repository.EvidenceRepository;
+import com.civicos.inspection.domain.Inspection;
+import com.civicos.inspection.repository.InspectionRepository;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
 
@@ -30,14 +32,17 @@ public class EvidenceQueryService {
 
 	private final EvidenceRepository evidenceRepository;
 	private final InterventionRepository interventionRepository;
+	private final InspectionRepository inspectionRepository;
 	private final AuthorizationService authorizationService;
 
 	public EvidenceQueryService(
 			EvidenceRepository evidenceRepository,
 			InterventionRepository interventionRepository,
+			InspectionRepository inspectionRepository,
 			AuthorizationService authorizationService) {
 		this.evidenceRepository = evidenceRepository;
 		this.interventionRepository = interventionRepository;
+		this.inspectionRepository = inspectionRepository;
 		this.authorizationService = authorizationService;
 	}
 
@@ -85,6 +90,17 @@ public class EvidenceQueryService {
 		if (global(principal)) {
 			return Specification.allOf();
 		}
+		if (principal.roles().contains(SystemRole.INSPECTOR.name())) {
+			return (root, query, builder) -> {
+				Subquery<UUID> assignedInterventions = query.subquery(UUID.class);
+				Root<Inspection> inspection = assignedInterventions.from(Inspection.class);
+				assignedInterventions.select(inspection.get("intervention").get("id")).where(
+						builder.equal(inspection.get("inspector").get("id"), principal.userId()));
+				return builder.and(
+						builder.equal(root.get("targetType"), "INTERVENTION"),
+						root.<UUID>get("targetId").in(assignedInterventions));
+			};
+		}
 		if (principal.agencyId() == null) {
 			throw new AccessDeniedException("An agency scope is required to list evidence.");
 		}
@@ -105,6 +121,10 @@ public class EvidenceQueryService {
 		}
 		if (!"INTERVENTION".equals(evidence.getTargetType())) {
 			return false;
+		}
+		if (principal.roles().contains(SystemRole.INSPECTOR.name())) {
+			return inspectionRepository.existsByInterventionIdAndInspectorId(
+					evidence.getTargetId(), principal.userId());
 		}
 		return interventionRepository.findById(evidence.getTargetId())
 				.map(intervention -> authorizationService.canAccessAgency(intervention.getAgency().getId()))

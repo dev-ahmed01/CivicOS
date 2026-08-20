@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -15,6 +17,7 @@ import jakarta.persistence.LockModeType;
 
 public interface InspectionRepository extends JpaRepository<Inspection, UUID> {
 	List<Inspection> findByInterventionIdOrderByCreatedAtAsc(UUID interventionId);
+	Page<Inspection> findByInspectorId(UUID inspectorId, Pageable pageable);
 	List<Inspection> findByInspectorIdAndStatus(UUID inspectorId, Inspection.Status status);
 	Optional<Inspection> findFirstByInterventionIdAndStatusOrderByCreatedAtDesc(
 			UUID interventionId, Inspection.Status status);
