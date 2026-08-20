@@ -6,9 +6,9 @@ describe('CivicOS operational shell', () => {
   it('opens the coordinator command center as the product-first workspace', () => {
     render(<App pathname="/" />)
 
-    expect(screen.getByRole('heading', { name: /command center/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /one physical-road problem across agency boundaries/i })).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: /primary navigation/i })).toBeInTheDocument()
-    expect(screen.getByText(/foundation ready/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByText(/simulated unless a verified live connection/i)).toBeInTheDocument()
   })
 

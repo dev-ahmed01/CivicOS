@@ -10,6 +10,7 @@ import com.civicos.ai.domain.AiRecommendation;
 
 public interface AiRecommendationRepository extends JpaRepository<AiRecommendation, UUID> {
 	List<AiRecommendation> findByConflictIdAndStatus(UUID conflictId, AiRecommendation.Status status);
+	List<AiRecommendation> findByConflictIdOrderByCreatedAtDesc(UUID conflictId);
 
 	@Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
 	java.util.Optional<AiRecommendation> findForUpdateById(UUID id);

@@ -73,6 +73,9 @@ import com.civicos.conflict.application.ConflictDetectionService;
 import com.civicos.conflict.application.ConflictResolutionResult;
 import com.civicos.conflict.application.ConflictResolutionService;
 import com.civicos.conflict.domain.Conflict;
+import com.civicos.coordination.application.CoordinationDecisionQueryService;
+import com.civicos.coordination.application.CoordinationDecisionService;
+import com.civicos.coordination.domain.CoordinationDecision;
 import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
 import com.civicos.dependency.application.DependencyQueryService;
@@ -279,6 +282,12 @@ class CivicOsApplicationTests {
 	private AiRecommendationReviewService aiRecommendationReviewService;
 
 	@Autowired
+	private CoordinationDecisionService coordinationDecisionService;
+
+	@Autowired
+	private CoordinationDecisionQueryService coordinationDecisionQueryService;
+
+	@Autowired
 	private ApiIdempotencyService apiIdempotencyService;
 
 	@Test
@@ -383,6 +392,9 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.paths['/api/v1/evidence'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/dependencies'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/slas'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/conflicts/{conflictId}/recommendations'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/conflicts/{conflictId}/coordination-decisions'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/conflicts/{conflictId}/coordination-decisions'].post").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/actions/{action}'].post.responses['409'].content['application/json'].schema['$ref']")
 						.value("#/components/schemas/ApiError"));
 	}
@@ -951,7 +963,6 @@ class CivicOsApplicationTests {
 		} finally {
 			SecurityContextHolder.clearContext();
 		}
-
 		authenticateWorkflowActor(
 				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "CONFLICT_RESOLVE");
 		try {
@@ -1752,6 +1763,97 @@ class CivicOsApplicationTests {
 					"update ai_recommendations set recommendation = '{\"tampered\":true}'::jsonb where id = ?",
 					reviewed.recommendationId()))
 					.isInstanceOf(DataAccessException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void coordinatorRecordsAnAuditedDecisionWithoutImplicitResolutionOrApproval() {
+		ConflictScenario scenario = createConflictScenario();
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "CONFLICT_ANALYSE");
+		ConflictAnalysisResult analysis;
+		try {
+			analysis = conflictDetectionService.analyse(
+					scenario.targetId(), "phase-16-conflict-source");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+		UUID openConflictId = jdbcTemplate.queryForObject(
+				"""
+				select c.id
+				from conflicts c
+				join conflict_interventions ci on ci.conflict_id = c.id
+				where ci.intervention_id = ? and c.status = 'OPEN'
+				order by c.detected_at desc, c.id
+				limit 1
+				""",
+				UUID.class, scenario.targetId());
+		ConflictAnalysisResult.DetectedConflict detected = analysis.conflicts().stream()
+				.filter(item -> item.conflictId().equals(openConflictId))
+				.findFirst()
+				.orElseThrow();
+		String conflictStatusBeforeDecision = jdbcTemplate.queryForObject(
+				"select status from conflicts where id = ?", String.class, detected.conflictId());
+		Integer approvalCountBeforeDecision = jdbcTemplate.queryForObject(
+				"select count(*) from approvals where intervention_id in (select intervention_id from conflict_interventions where conflict_id = ?)",
+				Integer.class, detected.conflictId());
+
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "COORDINATION_UPDATE");
+		try {
+			AiRecommendationGenerationResult generated = aiAdvisoryService.recommendCoordination(
+					new AiRequest(
+							AiTask.RECOMMENDATION_GENERATION,
+							"CONFLICT",
+							detected.conflictId(),
+							Map.of(
+									"affectedInterventions",
+									detected.affectedInterventionIds().stream().map(UUID::toString).toList(),
+									"affectedAgencies", List.of(scenario.actorAgencyId().toString())),
+							"phase-16-recommendation"));
+			var reviewed = aiRecommendationReviewService.review(
+					generated.recommendation().recommendationId(),
+					AiRecommendation.ReviewDecision.ACCEPT,
+					"Coordinator confirms the advisory sequence for a normal decision.",
+					"phase-16-recommendation-review");
+			var decision = coordinationDecisionService.record(
+					detected.conflictId(), CoordinationDecision.Type.ACCEPT,
+					"Utility agencies execute first, followed by one consolidated restoration window.",
+					reviewed.recommendationId(), "phase-16-human-decision");
+
+			assertThat(decision.acceptedRecommendationId()).isEqualTo(reviewed.recommendationId());
+			assertThat(decision.createdAt()).isNotNull();
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from conflicts where id = ?", String.class, detected.conflictId()))
+					.isEqualTo(conflictStatusBeforeDecision);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from approvals where intervention_id in (select intervention_id from conflict_interventions where conflict_id = ?)",
+					Integer.class, detected.conflictId())).isEqualTo(approvalCountBeforeDecision);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ? and action = 'COORDINATION_DECISION_RECORDED'",
+					Integer.class, decision.decisionId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "COORDINATION_VIEW");
+		try {
+			assertThat(coordinationDecisionQueryService.forConflict(detected.conflictId()))
+					.singleElement()
+					.satisfies(decision -> assertThat(decision.decisionType())
+							.isEqualTo(CoordinationDecision.Type.ACCEPT));
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "AGENCY_OFFICER", "COORDINATION_VIEW");
+		try {
+			assertThatThrownBy(() -> coordinationDecisionQueryService.forConflict(detected.conflictId()))
+					.isInstanceOf(AccessDeniedException.class);
 		} finally {
 			SecurityContextHolder.clearContext();
 		}
