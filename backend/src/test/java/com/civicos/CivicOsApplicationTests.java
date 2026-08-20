@@ -80,6 +80,7 @@ import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
 import com.civicos.dependency.application.DependencyQueryService;
 import com.civicos.dependency.domain.Dependency;
+import com.civicos.demo.DemoDataSeeder;
 import com.civicos.evidence.application.EvidenceReviewCommand;
 import com.civicos.evidence.application.EvidenceService;
 import com.civicos.evidence.application.EvidenceQueryService;
@@ -296,6 +297,9 @@ class CivicOsApplicationTests {
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
+		assertThat(applicationContext.getBeansOfType(DemoDataSeeder.class))
+				.as("demo data must be disabled outside the explicit demo profile")
+				.isEmpty();
 		for (String table : REQUIRED_TABLES) {
 			Boolean exists = jdbcTemplate.queryForObject(
 					"select to_regclass(?) is not null",

@@ -6,7 +6,7 @@ The SIH MVP is intentionally focused on Bengaluru road-cutting coordination. It 
 
 ## Current implementation status
 
-Phases 1 through 6 establish the deployable project, persistence, domain, security, workflow, and intervention-planning foundation:
+Phases 1 through 19 now establish the deployable platform, governed lifecycle, role-specific workspaces, and controlled demonstration dataset:
 
 - Java 21 and Spring Boot 3 modular-monolith backend scaffold
 - React, TypeScript, and Vite frontend scaffold
@@ -24,9 +24,11 @@ Phases 1 through 6 establish the deployable project, persistence, domain, securi
 - agency-scoped intervention creation and draft-only authoritative editing
 - auditable dependency planning with schedule blocking and hard-cycle rejection
 - environment-based configuration with no committed credentials
-- backend and frontend smoke tests
+- citizen, agency, coordinator, inspector, and administration workspaces
+- deterministic, profile-gated **DEMO / SYNTHETIC** scenario data with no live MARCS claim
+- backend integration tests plus frontend unit, accessibility-oriented interaction, lint, and production-build checks
 
-The deterministic conflict detection engine begins in Phase 7. REST APIs and role-specific screens remain in their later phases as defined by the master specification.
+Phase 20 is the next implementation boundary: end-to-end integration of the judge-visible story from detection through human decision, execution, proof, verification, and closure.
 
 ## Repository layout
 

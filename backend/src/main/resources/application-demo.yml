@@ -1,0 +1,14 @@
+spring:
+  config:
+    activate:
+      on-profile: demo
+
+civicos:
+  features:
+    demo-mode: true
+  demo:
+    password: ${DEMO_PASSWORD:}
+  ai:
+    enabled: false
+    provider: mock
+    model: deterministic-demo-advisor

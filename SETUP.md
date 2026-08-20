@@ -99,6 +99,31 @@ DEMO_MODE=false
 
 The core workflow must remain operational with AI disabled.
 
+## 6. Controlled synthetic demo dataset
+
+Phase 19 provides a deterministic dataset for local judging and integration work. It is never loaded by the default `local` profile. Use a fresh, non-production database, set a demo-only password of at least 12 characters, and activate the explicit profile:
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE='demo'
+$env:DEMO_PASSWORD='choose-a-demo-only-password'
+Set-Location backend
+.\mvnw.cmd spring-boot:run
+```
+
+The loader refuses to overlay an existing operational database unless that database already contains the CivicOS demo marker. It can then be rerun safely and idempotently. All agencies, users, roads, interventions, evidence metadata, AI outputs, notifications, and audit history are labelled **DEMO / SYNTHETIC**. The external-project descriptions are simulated source records; they do not claim a live MARCS connection.
+
+Demo sign-in emails use the shared password supplied through `DEMO_PASSWORD`:
+
+```text
+citizen.demo@civicos.example.invalid
+engineer.demo@civicos.example.invalid
+coordinator.demo@civicos.example.invalid
+inspector.demo@civicos.example.invalid
+admin.demo@civicos.example.invalid
+```
+
+Never activate the `demo` profile or reuse its password in a production environment.
+
 ## Phase boundary
 
-Phase 1 supplies the repository, builds, Docker Compose service, and configuration contract. Phase 2 supplies PostgreSQL/PostGIS persistence configuration and Flyway migrations. Phase 3 maps the operational domain entities and repositories. Phase 4 adds authentication, explicit database-backed RBAC, and migration `V10`. Phase 5 adds authoritative workflow services. Phase 6 adds validated road, road-segment, intervention, and dependency commands plus migration `V11` for their optimistic versions. The deterministic conflict engine begins in Phase 7.
+Phases 1 through 18 supply the deployable foundation, governed backend capabilities, REST/OpenAPI layer, and five role-specific workspaces. Phase 19 adds only controlled seed/demo data. Phase 20 is the next phase and owns end-to-end integration across the complete demonstration story.
