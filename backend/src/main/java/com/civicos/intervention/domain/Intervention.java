@@ -9,6 +9,7 @@ import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.persistence.AbstractAuditableEntity;
 import com.civicos.road.domain.RoadSegment;
 import com.civicos.user.domain.User;
+import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -32,6 +33,32 @@ public class Intervention extends AbstractAuditableEntity {
 		DRAFT, SUBMITTED, UNDER_REVIEW, COORDINATION_REQUIRED, APPROVED,
 		SCHEDULED, IN_PROGRESS, COMPLETED_PENDING_VERIFICATION,
 		VERIFICATION_FAILED, CORRECTIVE_ACTION, VERIFIED, CLOSED
+	}
+
+	public enum WorkflowAction {
+		SUBMIT(Status.DRAFT, Status.SUBMITTED),
+		BEGIN_REVIEW(Status.SUBMITTED, Status.UNDER_REVIEW),
+		REQUIRE_COORDINATION(Status.UNDER_REVIEW, Status.COORDINATION_REQUIRED),
+		APPROVE(Status.COORDINATION_REQUIRED, Status.APPROVED),
+		SCHEDULE(Status.APPROVED, Status.SCHEDULED),
+		START(Status.SCHEDULED, Status.IN_PROGRESS),
+		COMPLETE(Status.IN_PROGRESS, Status.COMPLETED_PENDING_VERIFICATION),
+		FAIL_VERIFICATION(Status.COMPLETED_PENDING_VERIFICATION, Status.VERIFICATION_FAILED),
+		BEGIN_CORRECTIVE_ACTION(Status.VERIFICATION_FAILED, Status.CORRECTIVE_ACTION),
+		RESUME_CORRECTIVE_WORK(Status.CORRECTIVE_ACTION, Status.IN_PROGRESS),
+		VERIFY(Status.COMPLETED_PENDING_VERIFICATION, Status.VERIFIED),
+		CLOSE(Status.VERIFIED, Status.CLOSED);
+
+		private final Status source;
+		private final Status target;
+
+		WorkflowAction(Status source, Status target) {
+			this.source = source;
+			this.target = target;
+		}
+
+		public Status source() { return source; }
+		public Status target() { return target; }
 	}
 
 	public enum Priority { LOW, NORMAL, HIGH, CRITICAL }
@@ -104,4 +131,20 @@ public class Intervention extends AbstractAuditableEntity {
 	public Priority getPriority() { return priority; }
 	public User getCreatedBy() { return createdBy; }
 	public long getVersion() { return version; }
+
+	public void transition(WorkflowAction action, Instant occurredAt) {
+		if (status != action.source()) {
+			throw new WorkflowActionNotAllowedException("INTERVENTION", status.name(), action.name());
+		}
+
+		status = action.target();
+		switch (action) {
+			case START -> actualStart = occurredAt;
+			case COMPLETE -> actualEnd = occurredAt;
+			case RESUME_CORRECTIVE_WORK -> actualEnd = null;
+			default -> {
+				// The remaining transitions do not alter execution timestamps.
+			}
+		}
+	}
 }

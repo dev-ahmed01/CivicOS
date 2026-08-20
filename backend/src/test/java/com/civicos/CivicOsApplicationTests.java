@@ -27,6 +27,8 @@ import org.springframework.data.repository.Repository;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -36,7 +38,16 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.auth.security.CivicPrincipal;
+import com.civicos.casefile.domain.CivicCase;
+import com.civicos.intervention.domain.Intervention;
 import com.civicos.road.repository.RoadSegmentRepository;
+import com.civicos.workflow.application.CaseWorkflowService;
+import com.civicos.workflow.application.InterventionWorkflowService;
+import com.civicos.workflow.application.SeparationOfDutiesException;
+import com.civicos.workflow.application.StaleWorkflowVersionException;
+import com.civicos.workflow.application.WorkflowTransitionResult;
+import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -116,6 +127,12 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private PasswordEncoder passwordEncoder;
+
+	@Autowired
+	private InterventionWorkflowService interventionWorkflowService;
+
+	@Autowired
+	private CaseWorkflowService caseWorkflowService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -294,6 +311,159 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
 	}
 
+	@Test
+	void authorizedWorkflowTransitionIsAtomicVersionedAndAudited() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_SUBMIT");
+		try {
+			WorkflowTransitionResult result = interventionWorkflowService.transition(
+					fixture.interventionId(),
+					Intervention.WorkflowAction.SUBMIT,
+					0,
+					"Ready for cross-agency review",
+					"c7ac8339-1ab0-47d8-86d7-f6e02d60da01");
+
+			assertThat(result.previousStatus()).isEqualTo("DRAFT");
+			assertThat(result.currentStatus()).isEqualTo("SUBMITTED");
+			assertThat(result.version()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					fixture.interventionId())).isEqualTo("SUBMITTED");
+			assertThat(jdbcTemplate.queryForObject(
+					"""
+					select count(*) from audit_events
+					where entity_id = ?
+					  and action = 'INTERVENTION_WORKFLOW_TRANSITION'
+					  and before_state ->> 'status' = 'DRAFT'
+					  and after_state ->> 'status' = 'SUBMITTED'
+					""",
+					Integer.class,
+					fixture.interventionId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void caseWorkflowUsesTheSameAuthorizationConcurrencyAndAuditBoundary() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "COORDINATOR", "OBSERVATION_TRIAGE");
+		try {
+			WorkflowTransitionResult result = caseWorkflowService.transition(
+					fixture.caseId(),
+					CivicCase.WorkflowAction.BEGIN_REVIEW,
+					0,
+					"Coordinator accepted the case for review",
+					"phase-5-case-review");
+
+			assertThat(result.previousStatus()).isEqualTo("OPEN");
+			assertThat(result.currentStatus()).isEqualTo("UNDER_REVIEW");
+			assertThat(result.version()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from civic_cases where id = ?",
+					String.class,
+					fixture.caseId())).isEqualTo("UNDER_REVIEW");
+			assertThat(jdbcTemplate.queryForObject(
+					"""
+					select count(*) from audit_events
+					where entity_id = ? and action = 'CIVIC_CASE_WORKFLOW_TRANSITION'
+					""",
+					Integer.class,
+					fixture.caseId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void invalidWorkflowTransitionDoesNotMutateOrAudit() {
+		WorkflowFixture fixture = createWorkflowFixture("CLOSED", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_SUBMIT");
+		try {
+			assertThatThrownBy(() -> interventionWorkflowService.transition(
+					fixture.interventionId(),
+					Intervention.WorkflowAction.SUBMIT,
+					0,
+					null,
+					"phase-5-invalid-transition"))
+					.isInstanceOf(WorkflowActionNotAllowedException.class);
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					fixture.interventionId())).isEqualTo("CLOSED");
+			assertThat(auditCount(fixture.interventionId())).isZero();
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void creatorCannotApproveOwnIntervention() {
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", true);
+		insertApproval(fixture.interventionId(), fixture.actorId());
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_APPROVE");
+		try {
+			assertThatThrownBy(() -> interventionWorkflowService.transition(
+					fixture.interventionId(),
+					Intervention.WorkflowAction.APPROVE,
+					0,
+					"Self approval attempt",
+					"phase-5-sod"))
+					.isInstanceOf(SeparationOfDutiesException.class);
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					fixture.interventionId())).isEqualTo("COORDINATION_REQUIRED");
+			assertThat(auditCount(fixture.interventionId())).isZero();
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void duplicateApprovalTransitionAllowsOnlyOneAuthoritativeMutation() {
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		UUID secondActorId = createWorkflowUser(fixture.agencyId());
+		insertApproval(fixture.interventionId(), fixture.actorId());
+		insertApproval(fixture.interventionId(), secondActorId);
+
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_APPROVE");
+		interventionWorkflowService.transition(
+				fixture.interventionId(),
+				Intervention.WorkflowAction.APPROVE,
+				0,
+				"Authority one approved",
+				"phase-5-approval-one");
+
+		authenticateWorkflowActor(
+				secondActorId, fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_APPROVE");
+		try {
+			assertThatThrownBy(() -> interventionWorkflowService.transition(
+					fixture.interventionId(),
+					Intervention.WorkflowAction.APPROVE,
+					0,
+					"Authority two approved stale state",
+					"phase-5-approval-two"))
+					.isInstanceOf(StaleWorkflowVersionException.class);
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					fixture.interventionId())).isEqualTo("APPROVED");
+			assertThat(auditCount(fixture.interventionId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
 	private JsonNode login(TestUser user) throws Exception {
 		String response = mockMvc.perform(post("/api/v1/auth/login")
 					.contentType(MediaType.APPLICATION_JSON)
@@ -335,6 +505,104 @@ class CivicOsApplicationTests {
 		return new TestUser(userId, email, password);
 	}
 
+	private WorkflowFixture createWorkflowFixture(String status, boolean actorIsCreator) {
+		UUID agencyId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into agencies (id, code, name, agency_type) values (?, ?, ?, 'GOVERNMENT')",
+				agencyId, "AG-" + agencyId, "Workflow Agency " + agencyId);
+		UUID actorId = createWorkflowUser(agencyId);
+		UUID creatorId = actorIsCreator ? actorId : createWorkflowUser(agencyId);
+
+		UUID roadId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into roads (id, external_reference, name, classification, geometry)
+				values (?, ?, ?, 'LOCAL', ST_GeomFromText('MULTILINESTRING((78.00 13.50, 78.01 13.51))', 4326))
+				""",
+				roadId, "ROAD-" + roadId, "Workflow Road " + roadId);
+		UUID roadSegmentId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into road_segments (
+				    id, road_id, external_reference, name, classification,
+				    surface_type, length_meters, geometry)
+				values (?, ?, ?, ?, 'LOCAL', 'BITUMINOUS', 100,
+				        ST_GeomFromText('LINESTRING(78.00 13.50, 78.01 13.51)', 4326))
+				""",
+				roadSegmentId, roadId, "SEG-" + roadSegmentId, "Workflow Segment " + roadSegmentId);
+		UUID caseId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into civic_cases (id, case_number, source, road_segment_id)
+				values (?, ?, 'AGENCY', ?)
+				""",
+				caseId, "CASE-" + caseId, roadSegmentId);
+		UUID interventionId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into interventions (
+				    id, intervention_number, case_id, agency_id, intervention_type,
+				    description, road_segment_id, geometry, planned_start, planned_end,
+				    status, created_by)
+				values (?, ?, ?, ?, 'ROADWORK', 'Phase 5 workflow fixture', ?,
+				        ST_GeomFromText('LINESTRING(78.00 13.50, 78.01 13.51)', 4326),
+				        '2026-08-20T08:00:00Z', '2026-08-21T08:00:00Z', ?, ?)
+				""",
+				interventionId, "INT-" + interventionId, caseId, agencyId,
+				roadSegmentId, status, creatorId);
+		return new WorkflowFixture(interventionId, caseId, agencyId, actorId);
+	}
+
+	private UUID createWorkflowUser(UUID agencyId) {
+		UUID userId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into users (id, agency_id, full_name, email, status)
+				values (?, ?, 'Phase 5 Workflow Actor', ?, 'ACTIVE')
+				""",
+				userId, agencyId, "phase5-" + userId + "@civicos.test");
+		return userId;
+	}
+
+	private void insertApproval(UUID interventionId, UUID actorId) {
+		jdbcTemplate.update(
+				"""
+				insert into approvals (
+				    id, intervention_id, actor_id, status, decision, reason, decided_at)
+				values (?, ?, ?, 'APPROVED', 'APPROVE', 'Approved for Phase 5 test', CURRENT_TIMESTAMP)
+				""",
+				UUID.randomUUID(), interventionId, actorId);
+	}
+
+	private void authenticateWorkflowActor(
+			UUID userId,
+			UUID agencyId,
+			String role,
+			String permission) {
+		CivicPrincipal principal = new CivicPrincipal(
+				userId,
+				agencyId,
+				"Phase 5 Workflow Actor",
+				"phase5-" + userId + "@civicos.test",
+				"",
+				true,
+				Set.of(role),
+				Set.of(permission),
+				List.of());
+		SecurityContextHolder.getContext().setAuthentication(
+				UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of()));
+	}
+
+	private int auditCount(UUID interventionId) {
+		return jdbcTemplate.queryForObject(
+				"select count(*) from audit_events where entity_id = ?",
+				Integer.class,
+				interventionId);
+	}
+
 	private record TestUser(UUID id, String email, String password) {
+	}
+
+	private record WorkflowFixture(UUID interventionId, UUID caseId, UUID agencyId, UUID actorId) {
 	}
 }

@@ -82,6 +82,32 @@ public class AuditEvent extends AbstractUuidEntity {
 		return event;
 	}
 
+	public static AuditEvent workflowTransition(
+			User actor,
+			String entityType,
+			UUID entityId,
+			String action,
+			Map<String, Object> beforeState,
+			Map<String, Object> afterState,
+			String reason,
+			String requestId) {
+		AuditEvent event = new AuditEvent();
+		event.actor = actor;
+		event.action = entityType + "_WORKFLOW_TRANSITION";
+		event.entityType = entityType;
+		event.entityId = entityId;
+		event.beforeState = new LinkedHashMap<>(beforeState);
+		event.afterState = new LinkedHashMap<>(afterState);
+		event.reason = reason == null || reason.isBlank() ? null : reason.strip();
+		event.requestId = parseUuid(requestId);
+		event.metadata.put("category", "WORKFLOW");
+		event.metadata.put("workflowAction", action);
+		if (requestId != null) {
+			event.metadata.put("correlationId", requestId);
+		}
+		return event;
+	}
+
 	private static UUID parseUuid(String value) {
 		try {
 			return value == null ? null : UUID.fromString(value);

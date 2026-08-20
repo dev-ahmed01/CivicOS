@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import com.civicos.common.persistence.AbstractAuditableEntity;
 import com.civicos.road.domain.RoadSegment;
+import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -20,6 +21,24 @@ public class CivicCase extends AbstractAuditableEntity {
 
 	public enum Source { CITIZEN, AGENCY, SYSTEM, IMPORT }
 	public enum Status { OPEN, UNDER_REVIEW, IN_PROGRESS, PENDING_VERIFICATION, VERIFIED, CLOSED }
+	public enum WorkflowAction {
+		BEGIN_REVIEW(Status.OPEN, Status.UNDER_REVIEW),
+		START_PROGRESS(Status.UNDER_REVIEW, Status.IN_PROGRESS),
+		REQUEST_VERIFICATION(Status.IN_PROGRESS, Status.PENDING_VERIFICATION),
+		VERIFY(Status.PENDING_VERIFICATION, Status.VERIFIED),
+		CLOSE(Status.VERIFIED, Status.CLOSED);
+
+		private final Status source;
+		private final Status target;
+
+		WorkflowAction(Status source, Status target) {
+			this.source = source;
+			this.target = target;
+		}
+
+		public Status source() { return source; }
+		public Status target() { return target; }
+	}
 	public enum Priority { LOW, NORMAL, HIGH, CRITICAL }
 
 	@Column(name = "case_number", nullable = false, unique = true, length = 50)
@@ -55,4 +74,15 @@ public class CivicCase extends AbstractAuditableEntity {
 	public RoadSegment getRoadSegment() { return roadSegment; }
 	public Instant getClosedAt() { return closedAt; }
 	public long getVersion() { return version; }
+
+	public void transition(WorkflowAction action, Instant occurredAt) {
+		if (status != action.source()) {
+			throw new WorkflowActionNotAllowedException("CIVIC_CASE", status.name(), action.name());
+		}
+
+		status = action.target();
+		if (action == WorkflowAction.CLOSE) {
+			closedAt = occurredAt;
+		}
+	}
 }

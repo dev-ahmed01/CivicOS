@@ -9,4 +9,9 @@ import com.civicos.verification.domain.Verification;
 
 public interface VerificationRepository extends JpaRepository<Verification, UUID> {
 	List<Verification> findByTargetTypeAndTargetIdOrderByCreatedAtAsc(String targetType, UUID targetId);
+	boolean existsByTargetTypeAndTargetIdAndSubmittedByIdAndResultIn(
+			String targetType,
+			UUID targetId,
+			UUID submittedById,
+			List<Verification.Result> results);
 }

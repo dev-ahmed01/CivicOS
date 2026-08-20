@@ -6,7 +6,7 @@ The SIH MVP is intentionally focused on Bengaluru road-cutting coordination. It 
 
 ## Current implementation status
 
-Phases 1 through 4 establish the deployable project, persistence, domain, and security foundation:
+Phases 1 through 5 establish the deployable project, persistence, domain, security, and workflow foundation:
 
 - Java 21 and Spring Boot 3 modular-monolith backend scaffold
 - React, TypeScript, and Vite frontend scaffold
@@ -18,10 +18,12 @@ Phases 1 through 4 establish the deployable project, persistence, domain, and se
 - 23 module-owned Spring Data repositories with native PostGIS candidate queries where appropriate
 - stateless JWT authentication with rotating, revocable refresh tokens
 - explicit database-backed RBAC, method authorization, agency scope checks, and security audit events
+- authoritative case and intervention state machines with command-only transitions
+- optimistic concurrency, approval/verification preconditions, separation of duties, and atomic workflow audit events
 - environment-based configuration with no committed credentials
 - backend and frontend smoke tests
 
-The core workflow/state machine begins in Phase 5. Conflict detection and role-specific screens remain in their later phases as defined by the master specification.
+Road/intervention/dependency features begin in Phase 6. Conflict detection and role-specific screens remain in their later phases as defined by the master specification.
 
 ## Repository layout
 

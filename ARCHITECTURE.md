@@ -31,7 +31,7 @@ The backend is a modular monolith rooted at `com.civicos`. Modules are introduce
 ```text
 common, auth, user, agency, road, casefile, intervention,
 dependency, conflict, coordination, approval, sla, escalation,
-evidence, inspection, verification, notification, audit, ai, admin
+evidence, inspection, verification, workflow, notification, audit, ai, admin
 ```
 
 Each implemented module owns its controller, service/application logic, domain model, repository, DTOs, mapping, and validation where applicable. Controllers do not contain business logic and JPA entities are never exposed directly.
@@ -87,4 +87,16 @@ Evidence            = provenance-preserving proof
 - Method-level permission checks and application-level agency scope checks keep backend authorization authoritative.
 - Requests receive correlation IDs, and authentication lifecycle events are written to the append-only audit store.
 - Security errors use consistent non-leaking JSON responses. Token and password DTO string representations are redacted.
-- Workflow-state and separation-of-duties authorization remain part of Phase 5, where authoritative transition rules exist.
+- Workflow authorization continues to resolve explicit database-backed permissions; administrative access is not an implicit operational override.
+
+## Phase 5 decisions
+
+- `CivicCase` and `Intervention` own command-oriented transition methods. There is no generic status mutation path.
+- The master specification's lifecycle vocabulary and correction loop are authoritative; supporting-document-only statuses are not introduced.
+- A transition transaction validates the actor, role, permission, agency scope, expected entity version, current state, separation of duties, and applicable business preconditions before mutation.
+- `@Version` optimistic locking plus a caller-supplied expected version prevents duplicate authoritative transitions and returns a conflict-class domain error.
+- Intervention approval requires an authoritative approval record from the current actor, no unresolved high-severity blocking conflict, and a creator distinct from the approver.
+- Pass/fail workflow transitions require the corresponding human verification record. Closure rechecks that successful final verification exists.
+- The entity update and immutable audit event are committed atomically. Audit state records the action, before/after status and version, actor, reason, and correlation ID.
+- Stable workflow error codes distinguish invalid state, failed preconditions, concurrent modification, and separation-of-duties denial.
+- Phase 5 exposes application services for later command APIs; the REST/OpenAPI surface remains in its master-specified phase.

@@ -4,6 +4,7 @@ import java.util.NoSuchElementException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -14,6 +15,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.civicos.auth.application.InvalidRefreshTokenException;
+import com.civicos.workflow.application.SeparationOfDutiesException;
+import com.civicos.workflow.application.StaleWorkflowVersionException;
+import com.civicos.workflow.application.WorkflowPreconditionException;
+import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -35,6 +40,33 @@ public class GlobalApiExceptionHandler {
 	@ExceptionHandler(AccessDeniedException.class)
 	ResponseEntity<ApiError> accessDenied(AccessDeniedException exception, HttpServletRequest request) {
 		return error(HttpStatus.FORBIDDEN, "FORBIDDEN", "You are not authorised to perform this action.", request);
+	}
+
+	@ExceptionHandler(SeparationOfDutiesException.class)
+	ResponseEntity<ApiError> separationOfDuties(
+			SeparationOfDutiesException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.FORBIDDEN, "SEPARATION_OF_DUTIES_VIOLATION", exception.getMessage(), request);
+	}
+
+	@ExceptionHandler(WorkflowActionNotAllowedException.class)
+	ResponseEntity<ApiError> workflowActionNotAllowed(
+			WorkflowActionNotAllowedException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "WORKFLOW_ACTION_NOT_ALLOWED", exception.getMessage(), request);
+	}
+
+	@ExceptionHandler(WorkflowPreconditionException.class)
+	ResponseEntity<ApiError> workflowPrecondition(
+			WorkflowPreconditionException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "WORKFLOW_PRECONDITION_FAILED", exception.getMessage(), request);
+	}
+
+	@ExceptionHandler({StaleWorkflowVersionException.class, OptimisticLockingFailureException.class})
+	ResponseEntity<ApiError> concurrentModification(Exception exception, HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "CONCURRENT_MODIFICATION",
+				"The resource was modified by another request.", request);
 	}
 
 	@ExceptionHandler(NoSuchElementException.class)

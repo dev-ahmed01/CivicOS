@@ -17,4 +17,16 @@ public interface ConflictRepository extends JpaRepository<Conflict, UUID> {
 
 	@Query("select distinct c from Conflict c join c.interventions i where i.id = :interventionId")
 	List<Conflict> findAllByInterventionId(@Param("interventionId") UUID interventionId);
+
+	@Query("""
+			select (count(c) > 0)
+			from Conflict c join c.interventions i
+			where i.id = :interventionId
+			  and c.severity = :severity
+			  and c.status in :statuses
+			""")
+	boolean existsBlockingConflict(
+			@Param("interventionId") UUID interventionId,
+			@Param("severity") Conflict.Severity severity,
+			@Param("statuses") List<Conflict.Status> statuses);
 }

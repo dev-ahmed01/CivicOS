@@ -101,4 +101,4 @@ The core workflow must remain operational with AI disabled.
 
 ## Phase boundary
 
-Phase 1 supplies the repository, builds, Docker Compose service, and configuration contract. Phase 2 supplies PostgreSQL/PostGIS persistence configuration and Flyway migrations. Phase 3 maps the operational domain entities and repositories. Phase 4 adds authentication, explicit database-backed RBAC, and migration `V10`. The core workflow/state machine begins in Phase 5.
+Phase 1 supplies the repository, builds, Docker Compose service, and configuration contract. Phase 2 supplies PostgreSQL/PostGIS persistence configuration and Flyway migrations. Phase 3 maps the operational domain entities and repositories. Phase 4 adds authentication, explicit database-backed RBAC, and migration `V10`. Phase 5 adds the authoritative case and intervention workflow services, optimistic concurrency, separation-of-duties enforcement, and atomic workflow auditing. Road, intervention, and dependency application features begin in Phase 6.
