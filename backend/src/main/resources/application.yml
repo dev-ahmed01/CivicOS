@@ -74,3 +74,24 @@ civicos:
     proximity-meters: ${CONFLICT_PROXIMITY_METERS:0}
     repeat-digging-window-days: ${CONFLICT_REPEAT_DIGGING_WINDOW_DAYS:30}
     multi-agency-minimum: ${CONFLICT_MULTI_AGENCY_MINIMUM:3}
+  approval:
+    required-evidence-types: ${APPROVAL_REQUIRED_EVIDENCE_TYPES:}
+  sla:
+    business-zone: ${SLA_BUSINESS_ZONE:Asia/Kolkata}
+    business-day-start: ${SLA_BUSINESS_DAY_START:09:00}
+    business-day-end: ${SLA_BUSINESS_DAY_END:18:00}
+    holidays: ${SLA_HOLIDAYS:}
+    at-risk-before-hours: ${SLA_AT_RISK_BEFORE_HOURS:4}
+    review-working-hours: ${SLA_REVIEW_WORKING_HOURS:9}
+    coordination-medium-working-hours: ${SLA_COORDINATION_MEDIUM_WORKING_HOURS:18}
+    coordination-high-working-hours: ${SLA_COORDINATION_HIGH_WORKING_HOURS:9}
+    coordination-critical-working-hours: ${SLA_COORDINATION_CRITICAL_WORKING_HOURS:4}
+    approval-working-hours: ${SLA_APPROVAL_WORKING_HOURS:9}
+    pre-work-working-hours: ${SLA_PRE_WORK_WORKING_HOURS:9}
+    execution-working-hours: ${SLA_EXECUTION_WORKING_HOURS:9}
+    evidence-working-hours: ${SLA_EVIDENCE_WORKING_HOURS:9}
+    verification-working-hours: ${SLA_VERIFICATION_WORKING_HOURS:9}
+    correction-working-hours: ${SLA_CORRECTION_WORKING_HOURS:18}
+    closure-working-hours: ${SLA_CLOSURE_WORKING_HOURS:9}
+    monitor-enabled: ${SLA_MONITOR_ENABLED:true}
+    monitor-interval-ms: ${SLA_MONITOR_INTERVAL_MS:60000}

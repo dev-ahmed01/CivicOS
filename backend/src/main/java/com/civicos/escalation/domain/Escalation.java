@@ -3,6 +3,7 @@ package com.civicos.escalation.domain;
 import java.time.Instant;
 
 import com.civicos.common.persistence.AbstractCreatedEntity;
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.sla.domain.Sla;
 import com.civicos.user.domain.User;
 
@@ -40,6 +41,22 @@ public class Escalation extends AbstractCreatedEntity {
 
 	@Column(name = "resolved_at")
 	private Instant resolvedAt;
+
+	protected Escalation() {
+	}
+
+	public static Escalation create(Sla sla, int level, String reason, User escalatedTo) {
+		if (level <= 0) {
+			throw new com.civicos.common.domain.DomainValidationException(
+					"Escalation level must be positive.");
+		}
+		Escalation escalation = new Escalation();
+		escalation.sla = ValidationRules.required(sla, "SLA");
+		escalation.level = level;
+		escalation.reason = ValidationRules.requiredText(reason, "Escalation reason");
+		escalation.escalatedTo = escalatedTo;
+		return escalation;
+	}
 
 	public Sla getSla() { return sla; }
 	public int getLevel() { return level; }

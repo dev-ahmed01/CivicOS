@@ -40,9 +40,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.approval.application.ApprovalDecisionCommand;
+import com.civicos.approval.application.ApprovalService;
+import com.civicos.approval.domain.Approval;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.domain.DomainConflictException;
+import com.civicos.common.domain.DomainValidationException;
+import com.civicos.common.domain.StaleEntityVersionException;
 import com.civicos.conflict.application.ConflictAnalysisResult;
 import com.civicos.conflict.application.ConflictDetectionService;
 import com.civicos.conflict.domain.Conflict;
@@ -60,6 +65,10 @@ import com.civicos.road.application.UpdateRoadCommand;
 import com.civicos.road.domain.Road;
 import com.civicos.road.domain.RoadSegment;
 import com.civicos.road.repository.RoadSegmentRepository;
+import com.civicos.sla.application.CreateSlaCommand;
+import com.civicos.sla.application.SlaService;
+import com.civicos.sla.application.SlaUrgency;
+import com.civicos.sla.domain.Sla;
 import com.civicos.workflow.application.CaseWorkflowService;
 import com.civicos.workflow.application.InterventionWorkflowService;
 import com.civicos.workflow.application.SeparationOfDutiesException;
@@ -120,6 +129,7 @@ class CivicOsApplicationTests {
 		registry.add("spring.datasource.username", postgis::getUsername);
 		registry.add("spring.datasource.password", postgis::getPassword);
 		registry.add("civicos.security.jwt-secret", () -> "phase-4-test-secret-that-is-at-least-32-bytes-long");
+		registry.add("civicos.sla.monitor-enabled", () -> "false");
 	}
 
 	@Autowired
@@ -163,6 +173,12 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private ConflictDetectionService conflictDetectionService;
+
+	@Autowired
+	private ApprovalService approvalService;
+
+	@Autowired
+	private SlaService slaService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -762,6 +778,190 @@ class CivicOsApplicationTests {
 					"select after_state ->> 'outcome' from audit_events where entity_id = ? and action = 'CONFLICT_ANALYSIS_COMPLETED'",
 					String.class,
 					isolated.interventionId())).isEqualTo("NO_CONFLICT");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void approvalDecisionIsAuthoritativeAuditedAndConcurrencySafe() {
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_REQUEST");
+		try {
+			var requested = approvalService.request(
+					fixture.interventionId(), "Coordination package complete", "phase-8-approval-request");
+			assertThat(requested.status()).isEqualTo(Approval.Status.PENDING);
+
+			authenticateWorkflowActor(
+					fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_APPROVE");
+			var approved = approvalService.decide(
+					requested.approvalId(),
+					new ApprovalDecisionCommand(Approval.Decision.APPROVE, "Approved", List.of(), 0),
+					"phase-8-approval-decide");
+
+			assertThat(approved.status()).isEqualTo(Approval.Status.APPROVED);
+			assertThat(approved.version()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ?",
+					Integer.class,
+					requested.approvalId())).isEqualTo(2);
+			assertThatThrownBy(() -> approvalService.decide(
+					requested.approvalId(),
+					new ApprovalDecisionCommand(Approval.Decision.APPROVE, "Duplicate", List.of(), 0),
+					"phase-8-approval-duplicate"))
+					.isInstanceOf(StaleEntityVersionException.class);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from approvals where id = ?",
+					String.class,
+					requested.approvalId())).isEqualTo("APPROVED");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void rejectedApprovalRequiresReasonAndRollsBackInvalidDecision() {
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "COORDINATOR", "APPROVAL_REQUEST");
+		try {
+			var requested = approvalService.request(
+					fixture.interventionId(), null, "phase-8-rejection-request");
+			authenticateWorkflowActor(
+					fixture.actorId(), fixture.agencyId(), "COORDINATOR", "APPROVAL_REJECT");
+
+			assertThatThrownBy(() -> approvalService.decide(
+					requested.approvalId(),
+					new ApprovalDecisionCommand(Approval.Decision.REJECT, null, List.of(), 0),
+					"phase-8-invalid-rejection"))
+					.isInstanceOf(DomainValidationException.class)
+					.hasMessageContaining("reason");
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from approvals where id = ?",
+					String.class,
+					requested.approvalId())).isEqualTo("PENDING");
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ?",
+					Integer.class,
+					requested.approvalId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void approvalGrantIsBlockedByDependenciesAndHighConflicts() {
+		WorkflowFixture target = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		WorkflowFixture prerequisite = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				target.actorId(), target.agencyId(), "COORDINATOR", "APPROVAL_REQUEST");
+		try {
+			var requested = approvalService.request(
+					target.interventionId(), null, "phase-8-policy-request");
+			UUID dependencyId = UUID.randomUUID();
+			jdbcTemplate.update(
+					"""
+					insert into dependencies (
+					    id, source_intervention_id, target_intervention_id,
+					    dependency_type, required, status, reason)
+					values (?, ?, ?, 'MUST_COMPLETE_BEFORE', true, 'BLOCKED', 'Approval policy test')
+					""",
+					dependencyId, prerequisite.interventionId(), target.interventionId());
+			authenticateWorkflowActor(
+					target.actorId(), target.agencyId(), "COORDINATOR", "APPROVAL_APPROVE");
+			ApprovalDecisionCommand approve = new ApprovalDecisionCommand(
+					Approval.Decision.APPROVE, "Policy checks passed", List.of(), 0);
+			assertThatThrownBy(() -> approvalService.decide(
+					requested.approvalId(), approve, "phase-8-blocked-dependency"))
+					.isInstanceOf(DomainConflictException.class)
+					.hasMessageContaining("dependency");
+
+			jdbcTemplate.update("update dependencies set status = 'CANCELLED' where id = ?", dependencyId);
+			UUID conflictId = UUID.randomUUID();
+			jdbcTemplate.update(
+					"""
+					insert into conflicts (
+					    id, conflict_number, road_segment_id, conflict_type,
+					    severity, status, explanation)
+					values (?, ?, ?, 'SAME_ROAD_OVERLAP', 'HIGH', 'OPEN', 'Approval policy test')
+					""",
+					conflictId, "CF-PHASE-8-" + conflictId, target.roadSegmentId());
+			jdbcTemplate.update(
+					"insert into conflict_interventions (conflict_id, intervention_id) values (?, ?), (?, ?)",
+					conflictId, target.interventionId(), conflictId, prerequisite.interventionId());
+			assertThatThrownBy(() -> approvalService.decide(
+					requested.approvalId(), approve, "phase-8-blocking-conflict"))
+					.isInstanceOf(DomainConflictException.class)
+					.hasMessageContaining("HIGH");
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from approvals where id = ?",
+					String.class,
+					requested.approvalId())).isEqualTo("PENDING");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void slaUsesBusinessHoursAndBreachesEscalateIdempotently() {
+		UUID targetId = UUID.randomUUID();
+		CreateSlaCommand command = new CreateSlaCommand(
+				"INTERVENTION", targetId, Sla.Type.APPROVAL, SlaUrgency.STANDARD,
+				Instant.parse("2026-08-21T10:30:00Z"));
+
+		var created = slaService.createSystem(command, "Approval obligation", "phase-8-sla-create");
+		var duplicate = slaService.createSystem(command, "Duplicate trigger", "phase-8-sla-duplicate");
+		assertThat(created.slaId()).isEqualTo(duplicate.slaId());
+		assertThat(created.deadline()).isEqualTo(Instant.parse("2026-08-24T10:30:00Z"));
+
+		var atRisk = slaService.monitorOne(
+				created.slaId(), created.deadline().minusSeconds(3 * 3600L), "phase-8-sla-risk");
+		assertThat(atRisk.status()).isEqualTo(Sla.Status.AT_RISK);
+		var breached = slaService.monitorOne(
+				created.slaId(), created.deadline(), "phase-8-sla-breach");
+		assertThat(breached.status()).isEqualTo(Sla.Status.BREACHED);
+		slaService.monitorOne(
+				created.slaId(), created.deadline().plusSeconds(3600), "phase-8-sla-recheck");
+
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from escalations where sla_id = ? and level = 1",
+				Integer.class,
+				created.slaId())).isEqualTo(1);
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from audit_events where entity_id = ? and action in ('SLA_AT_RISK', 'SLA_BREACHED')",
+				Integer.class,
+				created.slaId())).isEqualTo(2);
+	}
+
+	@Test
+	void slaPauseResumeAndCompletionAreVersionedAndAudited() {
+		WorkflowFixture admin = createWorkflowFixture("DRAFT", false);
+		var created = slaService.createSystem(
+				new CreateSlaCommand(
+						"INTERVENTION", admin.interventionId(), Sla.Type.REVIEW,
+						SlaUrgency.STANDARD, null),
+				"Initial review obligation",
+				"phase-8-sla-lifecycle-create");
+		authenticateWorkflowActor(
+				admin.actorId(), admin.agencyId(), "ADMIN", "SLA_MANAGE");
+		try {
+			var paused = slaService.pause(
+					created.slaId(), 0, "Awaiting external information", "phase-8-sla-pause");
+			assertThat(paused.status()).isEqualTo(Sla.Status.PAUSED);
+			var resumed = slaService.resume(
+					created.slaId(), 1, "Information received", "phase-8-sla-resume");
+			assertThat(resumed.status()).isEqualTo(Sla.Status.NORMAL);
+			assertThat(resumed.deadline()).isAfterOrEqualTo(created.deadline());
+			var completed = slaService.complete(
+					created.slaId(), 2, "Review completed", "phase-8-sla-complete");
+			assertThat(completed.status()).isEqualTo(Sla.Status.COMPLETED);
+			assertThat(completed.version()).isEqualTo(3);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ?",
+					Integer.class,
+					created.slaId())).isEqualTo(4);
 		} finally {
 			SecurityContextHolder.clearContext();
 		}

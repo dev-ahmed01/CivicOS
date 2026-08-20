@@ -10,4 +10,5 @@ import com.civicos.escalation.domain.Escalation;
 public interface EscalationRepository extends JpaRepository<Escalation, UUID> {
 	List<Escalation> findBySlaIdOrderByLevelAsc(UUID slaId);
 	List<Escalation> findByStatus(Escalation.Status status);
+	boolean existsBySlaIdAndLevel(UUID slaId, int level);
 }
