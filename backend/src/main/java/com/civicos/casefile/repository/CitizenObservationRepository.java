@@ -10,4 +10,5 @@ import com.civicos.casefile.domain.CitizenObservation;
 public interface CitizenObservationRepository extends JpaRepository<CitizenObservation, UUID> {
 	List<CitizenObservation> findByCivicCaseIdOrderBySubmittedAtAsc(UUID caseId);
 	List<CitizenObservation> findByRoadSegmentIdAndStatus(UUID roadSegmentId, CitizenObservation.Status status);
+	boolean existsByCivicCaseIdAndSubmittedById(UUID civicCaseId, UUID submittedById);
 }

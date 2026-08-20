@@ -37,6 +37,9 @@ import com.civicos.evidence.storage.FileStorageService;
 import com.civicos.evidence.storage.StoredFile;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 
@@ -57,6 +60,7 @@ public class EvidenceService {
 	private final EvidenceValidator validator;
 	private final EvidenceMetadataService metadataService;
 	private final FileStorageService fileStorageService;
+	private final NotificationOutboxService notificationOutboxService;
 	private final Clock clock;
 
 	public EvidenceService(
@@ -69,6 +73,7 @@ public class EvidenceService {
 			EvidenceValidator validator,
 			EvidenceMetadataService metadataService,
 			FileStorageService fileStorageService,
+			NotificationOutboxService notificationOutboxService,
 			Clock clock) {
 		this.evidenceRepository = evidenceRepository;
 		this.interventionRepository = interventionRepository;
@@ -79,6 +84,7 @@ public class EvidenceService {
 		this.validator = validator;
 		this.metadataService = metadataService;
 		this.fileStorageService = fileStorageService;
+		this.notificationOutboxService = notificationOutboxService;
 		this.clock = clock;
 	}
 
@@ -143,6 +149,15 @@ public class EvidenceService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				actor(principal), "EVIDENCE_SUBMITTED_FOR_REVIEW", "EVIDENCE", evidence.getId(),
 				before, state(evidence), reason, requestId));
+		notificationOutboxService.enqueue(new NotificationRequest(
+				"EVIDENCE:" + evidence.getId() + ":SUBMITTED:" + evidence.getVersion(),
+				Notification.Type.EVIDENCE_SUBMITTED,
+				target.ownerId(),
+				"Evidence submitted",
+				"Evidence for " + evidence.getTargetType()
+						+ " is ready for authorised review.",
+				evidence.getTargetType(),
+				evidence.getTargetId()));
 		return result(evidence, occurredAt);
 	}
 

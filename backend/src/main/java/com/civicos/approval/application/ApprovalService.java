@@ -22,6 +22,9 @@ import com.civicos.common.domain.DomainConflictException;
 import com.civicos.common.domain.StaleEntityVersionException;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 
@@ -34,6 +37,7 @@ public class ApprovalService {
 	private final AuditEventRepository auditEventRepository;
 	private final ScopedAuthorizationService authorizationService;
 	private final ApprovalPolicy approvalPolicy;
+	private final NotificationOutboxService notificationOutboxService;
 	private final Clock clock;
 
 	public ApprovalService(
@@ -43,6 +47,7 @@ public class ApprovalService {
 			AuditEventRepository auditEventRepository,
 			ScopedAuthorizationService authorizationService,
 			ApprovalPolicy approvalPolicy,
+			NotificationOutboxService notificationOutboxService,
 			Clock clock) {
 		this.approvalRepository = approvalRepository;
 		this.interventionRepository = interventionRepository;
@@ -50,6 +55,7 @@ public class ApprovalService {
 		this.auditEventRepository = auditEventRepository;
 		this.authorizationService = authorizationService;
 		this.approvalPolicy = approvalPolicy;
+		this.notificationOutboxService = notificationOutboxService;
 		this.clock = clock;
 	}
 
@@ -74,6 +80,15 @@ public class ApprovalService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				actor(principal), "APPROVAL_REQUESTED", "APPROVAL", approval.getId(),
 				null, state(approval), reason, requestId));
+		notificationOutboxService.enqueue(new NotificationRequest(
+				"APPROVAL:" + approval.getId() + ":PENDING",
+				Notification.Type.APPROVAL_PENDING,
+				intervention.getCreatedBy().getId(),
+				"Approval pending",
+				"Intervention " + intervention.getInterventionNumber()
+						+ " is awaiting an authorised approval decision.",
+				"INTERVENTION",
+				intervention.getId()));
 		return result(approval, occurredAt);
 	}
 

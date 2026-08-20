@@ -10,6 +10,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import com.civicos.common.persistence.AbstractUuidEntity;
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.user.domain.User;
 
 import jakarta.persistence.Column;
@@ -71,14 +72,12 @@ public class AuditEvent extends AbstractUuidEntity {
 			String requestId) {
 		AuditEvent event = new AuditEvent();
 		event.actor = actor;
-		event.action = action;
-		event.entityType = entityType;
-		event.entityId = entityId;
+		event.action = ValidationRules.requiredText(action, "Audit action");
+		event.entityType = ValidationRules.requiredText(entityType, "Audit entity type").toUpperCase();
+		event.entityId = ValidationRules.required(entityId, "Audit entity id");
 		event.requestId = parseUuid(requestId);
 		event.metadata.put("category", "SECURITY");
-		if (requestId != null) {
-			event.metadata.put("correlationId", requestId);
-		}
+		event.addContext(requestId);
 		return event;
 	}
 
@@ -93,18 +92,18 @@ public class AuditEvent extends AbstractUuidEntity {
 			String requestId) {
 		AuditEvent event = new AuditEvent();
 		event.actor = actor;
-		event.action = entityType + "_WORKFLOW_TRANSITION";
-		event.entityType = entityType;
-		event.entityId = entityId;
+		String normalizedEntityType = ValidationRules.requiredText(
+				entityType, "Audit entity type").toUpperCase();
+		event.action = normalizedEntityType + "_WORKFLOW_TRANSITION";
+		event.entityType = normalizedEntityType;
+		event.entityId = ValidationRules.required(entityId, "Audit entity id");
 		event.beforeState = new LinkedHashMap<>(beforeState);
 		event.afterState = new LinkedHashMap<>(afterState);
 		event.reason = reason == null || reason.isBlank() ? null : reason.strip();
 		event.requestId = parseUuid(requestId);
 		event.metadata.put("category", "WORKFLOW");
-		event.metadata.put("workflowAction", action);
-		if (requestId != null) {
-			event.metadata.put("correlationId", requestId);
-		}
+		event.metadata.put("workflowAction", ValidationRules.requiredText(action, "Workflow action"));
+		event.addContext(requestId);
 		return event;
 	}
 
@@ -119,18 +118,31 @@ public class AuditEvent extends AbstractUuidEntity {
 			String requestId) {
 		AuditEvent event = new AuditEvent();
 		event.actor = actor;
-		event.action = action;
-		event.entityType = entityType;
-		event.entityId = entityId;
+		event.action = ValidationRules.requiredText(action, "Audit action");
+		event.entityType = ValidationRules.requiredText(entityType, "Audit entity type").toUpperCase();
+		event.entityId = ValidationRules.required(entityId, "Audit entity id");
 		event.beforeState = beforeState == null ? null : new LinkedHashMap<>(beforeState);
 		event.afterState = afterState == null ? null : new LinkedHashMap<>(afterState);
 		event.reason = reason == null || reason.isBlank() ? null : reason.strip();
 		event.requestId = parseUuid(requestId);
 		event.metadata.put("category", "DOMAIN");
-		if (requestId != null) {
-			event.metadata.put("correlationId", requestId);
-		}
+		event.addContext(requestId);
 		return event;
+	}
+
+	private void addContext(String correlationId) {
+		if (correlationId != null && !correlationId.isBlank()) {
+			metadata.put("correlationId", correlationId.strip());
+		}
+		if (actor != null) {
+			metadata.put("actorRoles", actor.getRoles().stream()
+					.map(role -> role.getCode())
+					.sorted()
+					.toList());
+			if (actor.getAgency() != null) {
+				metadata.put("agencyId", actor.getAgency().getId().toString());
+			}
+		}
 	}
 
 	private static UUID parseUuid(String value) {

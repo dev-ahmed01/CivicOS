@@ -39,6 +39,9 @@ import com.civicos.dependency.repository.DependencyRepository;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.ConflictCandidateProjection;
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 
@@ -55,6 +58,7 @@ public class ConflictDetectionService {
 	private final ScopedAuthorizationService authorizationService;
 	private final ConflictRuleEngine ruleEngine;
 	private final ConflictPolicyProperties policy;
+	private final NotificationOutboxService notificationOutboxService;
 	private final EntityManager entityManager;
 
 	public ConflictDetectionService(
@@ -66,6 +70,7 @@ public class ConflictDetectionService {
 			ScopedAuthorizationService authorizationService,
 			ConflictRuleEngine ruleEngine,
 			ConflictPolicyProperties policy,
+			NotificationOutboxService notificationOutboxService,
 			EntityManager entityManager) {
 		this.interventionRepository = interventionRepository;
 		this.dependencyRepository = dependencyRepository;
@@ -75,6 +80,7 @@ public class ConflictDetectionService {
 		this.authorizationService = authorizationService;
 		this.ruleEngine = ruleEngine;
 		this.policy = policy;
+		this.notificationOutboxService = notificationOutboxService;
 		this.entityManager = entityManager;
 	}
 
@@ -174,8 +180,25 @@ public class ConflictDetectionService {
 					conflictState(conflict),
 					finding.explanation(),
 					requestId));
+			enqueueConflictNotifications(conflict);
 		}
 		return result(conflict, action);
+	}
+
+	private void enqueueConflictNotifications(Conflict conflict) {
+		for (Intervention intervention : conflict.getInterventions()) {
+			notificationOutboxService.enqueue(new NotificationRequest(
+					"CONFLICT:" + conflict.getId() + ":" + conflict.getVersion()
+							+ ":" + intervention.getCreatedBy().getId(),
+					Notification.Type.CONFLICT_DETECTED,
+					intervention.getCreatedBy().getId(),
+					"Coordination conflict detected",
+					"A " + conflict.getSeverity().name()
+							+ " coordination conflict requires review for intervention "
+							+ intervention.getInterventionNumber() + ".",
+					"CONFLICT",
+					conflict.getId()));
+		}
 	}
 
 	private Map<String, Object> conflictState(Conflict conflict) {

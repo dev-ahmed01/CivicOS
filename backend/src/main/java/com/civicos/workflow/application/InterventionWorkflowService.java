@@ -22,6 +22,9 @@ import com.civicos.conflict.domain.Conflict;
 import com.civicos.conflict.repository.ConflictRepository;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 import com.civicos.verification.domain.Verification;
@@ -52,6 +55,7 @@ public class InterventionWorkflowService {
 	private final AuditEventRepository auditEventRepository;
 	private final UserRepository userRepository;
 	private final WorkflowAuthorizationPolicy authorizationPolicy;
+	private final NotificationOutboxService notificationOutboxService;
 	private final Clock clock;
 
 	public InterventionWorkflowService(
@@ -62,6 +66,7 @@ public class InterventionWorkflowService {
 			AuditEventRepository auditEventRepository,
 			UserRepository userRepository,
 			WorkflowAuthorizationPolicy authorizationPolicy,
+			NotificationOutboxService notificationOutboxService,
 			Clock clock) {
 		this.interventionRepository = interventionRepository;
 		this.approvalRepository = approvalRepository;
@@ -70,6 +75,7 @@ public class InterventionWorkflowService {
 		this.auditEventRepository = auditEventRepository;
 		this.userRepository = userRepository;
 		this.authorizationPolicy = authorizationPolicy;
+		this.notificationOutboxService = notificationOutboxService;
 		this.clock = clock;
 	}
 
@@ -104,6 +110,7 @@ public class InterventionWorkflowService {
 				afterState,
 				reason,
 				requestId));
+		enqueueNotification(intervention, action);
 
 		return new WorkflowTransitionResult(
 				"INTERVENTION",
@@ -113,6 +120,38 @@ public class InterventionWorkflowService {
 				action.target().name(),
 				intervention.getVersion(),
 				transitionedAt);
+	}
+
+	private void enqueueNotification(
+			Intervention intervention, Intervention.WorkflowAction action) {
+		Notification.Type type = switch (action) {
+			case SUBMIT -> Notification.Type.INTERVENTION_SUBMITTED;
+			case START -> Notification.Type.WORK_STARTED;
+			case COMPLETE -> Notification.Type.VERIFICATION_REQUESTED;
+			case FAIL_VERIFICATION -> Notification.Type.VERIFICATION_FAILED;
+			case BEGIN_CORRECTIVE_ACTION -> Notification.Type.INTERVENTION_REOPENED;
+			default -> null;
+		};
+		if (type == null) {
+			return;
+		}
+		String title = switch (type) {
+			case INTERVENTION_SUBMITTED -> "Intervention submitted";
+			case WORK_STARTED -> "Intervention work started";
+			case VERIFICATION_REQUESTED -> "Verification requested";
+			case VERIFICATION_FAILED -> "Verification failed";
+			case INTERVENTION_REOPENED -> "Corrective action required";
+			default -> throw new IllegalStateException("Unsupported workflow notification type: " + type);
+		};
+		notificationOutboxService.enqueue(new NotificationRequest(
+				"INTERVENTION:" + intervention.getId() + ":" + action + ":" + intervention.getVersion(),
+				type,
+				intervention.getCreatedBy().getId(),
+				title,
+				"Intervention " + intervention.getInterventionNumber()
+						+ " is now " + intervention.getStatus().name() + ".",
+				"INTERVENTION",
+				intervention.getId()));
 	}
 
 	private CivicPrincipal authorize(Intervention.WorkflowAction action, UUID agencyId) {

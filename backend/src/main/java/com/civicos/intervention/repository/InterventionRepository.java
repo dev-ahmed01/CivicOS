@@ -16,6 +16,7 @@ public interface InterventionRepository extends JpaRepository<Intervention, UUID
 
 	Optional<Intervention> findByInterventionNumber(String interventionNumber);
 	boolean existsByInterventionNumber(String interventionNumber);
+	boolean existsByCivicCaseIdAndAgencyId(UUID civicCaseId, UUID agencyId);
 
 	List<Intervention> findByRoadSegmentIdAndStatusIn(UUID roadSegmentId, List<Intervention.Status> statuses);
 	boolean existsByRoadSegmentIdAndStatusNot(UUID roadSegmentId, Intervention.Status status);

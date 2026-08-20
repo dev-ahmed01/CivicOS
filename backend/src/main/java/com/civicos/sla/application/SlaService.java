@@ -21,6 +21,10 @@ import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.common.domain.DomainConflictException;
 import com.civicos.common.domain.StaleEntityVersionException;
 import com.civicos.escalation.application.EscalationService;
+import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.sla.config.SlaPolicyProperties;
 import com.civicos.sla.domain.Sla;
 import com.civicos.sla.repository.SlaRepository;
@@ -42,6 +46,8 @@ public class SlaService {
 	private final SlaDeadlineCalculator deadlineCalculator;
 	private final SlaPolicyProperties policy;
 	private final EscalationService escalationService;
+	private final InterventionRepository interventionRepository;
+	private final NotificationOutboxService notificationOutboxService;
 	private final Clock clock;
 	private final EntityManager entityManager;
 
@@ -53,6 +59,8 @@ public class SlaService {
 			SlaDeadlineCalculator deadlineCalculator,
 			SlaPolicyProperties policy,
 			EscalationService escalationService,
+			InterventionRepository interventionRepository,
+			NotificationOutboxService notificationOutboxService,
 			Clock clock,
 			EntityManager entityManager) {
 		this.slaRepository = slaRepository;
@@ -62,6 +70,8 @@ public class SlaService {
 		this.deadlineCalculator = deadlineCalculator;
 		this.policy = policy;
 		this.escalationService = escalationService;
+		this.interventionRepository = interventionRepository;
+		this.notificationOutboxService = notificationOutboxService;
 		this.clock = clock;
 		this.entityManager = entityManager;
 	}
@@ -112,10 +122,33 @@ public class SlaService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				null, action, "SLA", sla.getId(), before, state(sla),
 				"Deterministic SLA monitoring assessment.", requestId));
+		enqueueDeadlineNotification(sla);
 		if (sla.getStatus() == Sla.Status.BREACHED) {
 			escalationService.createForBreach(sla, requestId);
 		}
 		return result(sla);
+	}
+
+	private void enqueueDeadlineNotification(Sla sla) {
+		if (!"INTERVENTION".equals(sla.getTargetType())) {
+			return;
+		}
+		interventionRepository.findById(sla.getTargetId()).ifPresent(intervention -> {
+			Notification.Type type = sla.getStatus() == Sla.Status.BREACHED
+					? Notification.Type.SLA_BREACHED
+					: Notification.Type.DEADLINE_APPROACHING;
+			String title = sla.getStatus() == Sla.Status.BREACHED
+					? "SLA breached" : "SLA deadline approaching";
+			notificationOutboxService.enqueue(new NotificationRequest(
+					"SLA:" + sla.getId() + ":" + sla.getStatus() + ":" + sla.getVersion(),
+					type,
+					intervention.getCreatedBy().getId(),
+					title,
+					"The " + sla.getSlaType().name() + " SLA for intervention "
+							+ intervention.getInterventionNumber() + " is " + sla.getStatus().name() + ".",
+					"INTERVENTION",
+					intervention.getId()));
+		});
 	}
 
 	private SlaResult create(

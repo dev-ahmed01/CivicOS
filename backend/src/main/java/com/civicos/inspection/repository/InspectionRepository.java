@@ -19,6 +19,7 @@ public interface InspectionRepository extends JpaRepository<Inspection, UUID> {
 	Optional<Inspection> findFirstByInterventionIdAndStatusOrderByCreatedAtDesc(
 			UUID interventionId, Inspection.Status status);
 	boolean existsByInterventionIdAndStatusIn(UUID interventionId, List<Inspection.Status> statuses);
+	boolean existsByInterventionIdAndInspectorId(UUID interventionId, UUID inspectorId);
 
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("select inspection from Inspection inspection where inspection.id = :id")

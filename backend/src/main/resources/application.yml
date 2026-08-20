@@ -79,6 +79,12 @@ civicos:
     required-evidence-types: ${APPROVAL_REQUIRED_EVIDENCE_TYPES:}
   verification:
     required-evidence-types: ${VERIFICATION_REQUIRED_EVIDENCE_TYPES:COMPLETION,RESTORATION}
+  notification:
+    dispatcher-enabled: ${NOTIFICATION_DISPATCHER_ENABLED:true}
+    dispatcher-interval-ms: ${NOTIFICATION_DISPATCHER_INTERVAL_MS:5000}
+    batch-size: ${NOTIFICATION_BATCH_SIZE:50}
+    max-attempts: ${NOTIFICATION_MAX_ATTEMPTS:5}
+    retry-delay-seconds: ${NOTIFICATION_RETRY_DELAY_SECONDS:30}
   sla:
     business-zone: ${SLA_BUSINESS_ZONE:Asia/Kolkata}
     business-day-start: ${SLA_BUSINESS_DAY_START:09:00}

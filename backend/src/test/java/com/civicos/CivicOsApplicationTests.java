@@ -33,6 +33,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -45,6 +46,7 @@ import com.civicos.intervention.repository.InterventionRepository;
 import com.civicos.approval.application.ApprovalDecisionCommand;
 import com.civicos.approval.application.ApprovalService;
 import com.civicos.approval.domain.Approval;
+import com.civicos.audit.application.AuditQueryService;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.domain.DomainConflictException;
@@ -68,6 +70,11 @@ import com.civicos.intervention.application.CreateInterventionCommand;
 import com.civicos.intervention.application.InterventionManagementService;
 import com.civicos.intervention.application.UpdateDraftInterventionCommand;
 import com.civicos.intervention.domain.Intervention;
+import com.civicos.notification.application.NotificationOutboxProcessor;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.application.NotificationService;
+import com.civicos.notification.domain.Notification;
 import com.civicos.road.application.CreateRoadCommand;
 import com.civicos.road.application.CreateRoadSegmentCommand;
 import com.civicos.road.application.RoadManagementService;
@@ -127,6 +134,7 @@ class CivicOsApplicationTests {
 			"inspections",
 			"verifications",
 			"notifications",
+			"notification_outbox",
 			"audit_events",
 			"ai_runs",
 			"ai_recommendations",
@@ -145,6 +153,7 @@ class CivicOsApplicationTests {
 		registry.add("spring.datasource.password", postgis::getPassword);
 		registry.add("civicos.security.jwt-secret", () -> "phase-4-test-secret-that-is-at-least-32-bytes-long");
 		registry.add("civicos.sla.monitor-enabled", () -> "false");
+		registry.add("civicos.notification.dispatcher-enabled", () -> "false");
 		registry.add("civicos.file-storage.path", () -> EVIDENCE_STORAGE_PATH.toString());
 	}
 
@@ -208,6 +217,18 @@ class CivicOsApplicationTests {
 	@Autowired
 	private VerificationService verificationService;
 
+	@Autowired
+	private NotificationOutboxService notificationOutboxService;
+
+	@Autowired
+	private NotificationOutboxProcessor notificationOutboxProcessor;
+
+	@Autowired
+	private NotificationService notificationService;
+
+	@Autowired
+	private AuditQueryService auditQueryService;
+
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
 		for (String table : REQUIRED_TABLES) {
@@ -267,9 +288,9 @@ class CivicOsApplicationTests {
 				"Agency", "User", "Role", "Permission", "Road", "RoadSegment",
 				"CivicCase", "CitizenObservation", "Intervention", "Dependency",
 				"Conflict", "CoordinationDecision", "Approval", "Sla", "Escalation",
-				"Evidence", "Inspection", "Verification", "Notification", "AuditEvent",
+				"Evidence", "Inspection", "Verification", "Notification", "NotificationOutboxEvent", "AuditEvent",
 				"AiRun", "AiRecommendation", "RefreshToken");
-		assertThat(applicationContext.getBeansOfType(Repository.class)).hasSize(23);
+		assertThat(applicationContext.getBeansOfType(Repository.class)).hasSize(24);
 	}
 
 	@Test
@@ -1167,6 +1188,122 @@ class CivicOsApplicationTests {
 		}
 	}
 
+	@Test
+	void notificationOutboxIsIdempotentAndOnlyRecipientsCanReadDeliveredNotifications() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		NotificationRequest request = new NotificationRequest(
+				"phase-10-idempotent-" + fixture.interventionId(),
+				Notification.Type.TASK_ASSIGNED,
+				fixture.actorId(),
+				"Coordination task assigned",
+				"A coordination task is ready for review.",
+				"INTERVENTION",
+				fixture.interventionId());
+
+		UUID outboxId = notificationOutboxService.enqueue(request);
+		assertThat(notificationOutboxService.enqueue(request)).isEqualTo(outboxId);
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from notification_outbox where event_key = ?",
+				Integer.class,
+				request.eventKey())).isEqualTo(1);
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from notifications where recipient_id = ?",
+				Integer.class,
+				fixture.actorId())).isZero();
+
+		notificationOutboxProcessor.process(outboxId);
+		assertThat(jdbcTemplate.queryForObject(
+				"select status from notification_outbox where id = ?",
+				String.class,
+				outboxId)).isEqualTo("DELIVERED");
+
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_VIEW");
+		UUID notificationId;
+		try {
+			assertThat(notificationService.unreadCount()).isEqualTo(1);
+			var unread = notificationService.listForCurrentUser(true);
+			assertThat(unread).hasSize(1);
+			notificationId = unread.getFirst().notificationId();
+			var read = notificationService.markRead(notificationId);
+			assertThat(read.readAt()).isNotNull();
+			assertThat(read.version()).isEqualTo(1);
+			assertThat(notificationService.unreadCount()).isZero();
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		WorkflowFixture unrelated = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				unrelated.actorId(), unrelated.agencyId(), "AGENCY_OFFICER", "INTERVENTION_VIEW");
+		try {
+			assertThatThrownBy(() -> notificationService.markRead(notificationId))
+					.isInstanceOf(AccessDeniedException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void workflowQueuesNotificationsAndAuditVisibilityIsResourceScoped() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		assignSystemRole(fixture.actorId(), "AGENCY_OFFICER");
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_SUBMIT");
+		try {
+			interventionWorkflowService.transition(
+					fixture.interventionId(), Intervention.WorkflowAction.SUBMIT, 0,
+					"Ready for review", "phase-10-workflow-audit");
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from notification_outbox where target_id = ? and status = 'PENDING'",
+					Integer.class,
+					fixture.interventionId())).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from notifications where target_id = ?",
+					Integer.class,
+					fixture.interventionId())).isZero();
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "AUDIT_VIEW");
+		UUID eventId;
+		try {
+			var trail = auditQueryService.entityTrail("intervention", fixture.interventionId());
+			assertThat(trail).hasSize(1);
+			assertThat(trail.getFirst().metadata())
+					.containsEntry("agencyId", fixture.agencyId().toString())
+					.containsEntry("correlationId", "phase-10-workflow-audit");
+			assertThat(trail.getFirst().metadata().get("actorRoles"))
+					.isEqualTo(List.of("AGENCY_OFFICER"));
+			eventId = trail.getFirst().eventId();
+			assertThat(auditQueryService.byEventId(eventId).entityId())
+					.isEqualTo(fixture.interventionId());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		WorkflowFixture unrelated = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				unrelated.actorId(), unrelated.agencyId(), "AGENCY_OFFICER", "AUDIT_VIEW");
+		try {
+			assertThatThrownBy(() -> auditQueryService.byEventId(eventId))
+					.isInstanceOf(AccessDeniedException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				unrelated.actorId(), unrelated.agencyId(), "ADMIN", "AUDIT_VIEW");
+		try {
+			assertThat(auditQueryService.byEventId(eventId).entityId())
+					.isEqualTo(fixture.interventionId());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
 	private void uploadAndAcceptEvidence(
 			WorkflowFixture fixture,
 			UUID uploaderId,
@@ -1383,6 +1520,18 @@ class CivicOsApplicationTests {
 				""",
 				userId, agencyId, "phase5-" + userId + "@civicos.test");
 		return userId;
+	}
+
+	private void assignSystemRole(UUID userId, String roleCode) {
+		UUID roleId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into roles (id, code, name, system_role) values (?, ?, ?, true) on conflict (code) do nothing",
+				roleId, roleCode, roleCode);
+		roleId = jdbcTemplate.queryForObject(
+				"select id from roles where code = ?", UUID.class, roleCode);
+		jdbcTemplate.update(
+				"insert into user_roles (user_id, role_id) values (?, ?) on conflict do nothing",
+				userId, roleId);
 	}
 
 	private void insertApproval(UUID interventionId, UUID actorId) {

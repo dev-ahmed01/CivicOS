@@ -29,6 +29,9 @@ import com.civicos.dependency.domain.Dependency;
 import com.civicos.dependency.repository.DependencyRepository;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
+import com.civicos.notification.application.NotificationOutboxService;
+import com.civicos.notification.application.NotificationRequest;
+import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 
@@ -45,6 +48,7 @@ public class DependencyManagementService {
 	private final UserRepository userRepository;
 	private final ScopedAuthorizationService authorizationService;
 	private final DependencyScheduleValidator scheduleValidator;
+	private final NotificationOutboxService notificationOutboxService;
 	private final EntityManager entityManager;
 	private final Clock clock;
 
@@ -55,6 +59,7 @@ public class DependencyManagementService {
 			UserRepository userRepository,
 			ScopedAuthorizationService authorizationService,
 			DependencyScheduleValidator scheduleValidator,
+			NotificationOutboxService notificationOutboxService,
 			EntityManager entityManager,
 			Clock clock) {
 		this.dependencyRepository = dependencyRepository;
@@ -63,6 +68,7 @@ public class DependencyManagementService {
 		this.userRepository = userRepository;
 		this.authorizationService = authorizationService;
 		this.scheduleValidator = scheduleValidator;
+		this.notificationOutboxService = notificationOutboxService;
 		this.entityManager = entityManager;
 		this.clock = clock;
 	}
@@ -104,6 +110,17 @@ public class DependencyManagementService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				actor(principal), "DEPENDENCY_CREATED", "DEPENDENCY", dependency.getId(),
 				null, state(dependency), command.reason(), requestId));
+		if (dependency.getStatus() == Dependency.Status.BLOCKED) {
+			notificationOutboxService.enqueue(new NotificationRequest(
+					"DEPENDENCY:" + dependency.getId() + ":BLOCKED",
+					Notification.Type.DEPENDENCY_BLOCKED,
+					target.getCreatedBy().getId(),
+					"Dependency blocked",
+					"A required dependency is blocking intervention "
+							+ target.getInterventionNumber() + ".",
+					"DEPENDENCY",
+					dependency.getId()));
+		}
 		return new DomainMutationResult(
 				"DEPENDENCY", dependency.getId(), "CREATE", dependency.getVersion(), occurredAt);
 	}
