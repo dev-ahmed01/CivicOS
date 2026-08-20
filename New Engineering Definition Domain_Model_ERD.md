@@ -403,9 +403,12 @@ CLOSED
 REJECTED
 CANCELLED
 ON_HOLD
-OVERDUE
 REOPENED
 ```
+
+`OVERDUE` is represented by the related SLA state and is not an Intervention
+status. Reinspection is represented by Inspection records. The status list
+above is authoritative across CivicOS.
 
 Priority:
 

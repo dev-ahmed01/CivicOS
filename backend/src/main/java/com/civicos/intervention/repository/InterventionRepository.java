@@ -7,16 +7,25 @@ import java.util.UUID;
 
 import org.locationtech.jts.geom.Geometry;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
 
 import com.civicos.intervention.domain.Intervention;
 
-public interface InterventionRepository extends JpaRepository<Intervention, UUID> {
+import jakarta.persistence.LockModeType;
+
+public interface InterventionRepository extends JpaRepository<Intervention, UUID>,
+		JpaSpecificationExecutor<Intervention> {
 
 	Optional<Intervention> findByInterventionNumber(String interventionNumber);
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("select intervention from Intervention intervention where intervention.id = :id")
+	Optional<Intervention> findForUpdate(@Param("id") UUID id);
 	boolean existsByInterventionNumber(String interventionNumber);
 	boolean existsByCivicCaseIdAndAgencyId(UUID civicCaseId, UUID agencyId);
+	List<Intervention> findByCivicCaseIdOrderByCreatedAtAsc(UUID civicCaseId);
 
 	List<Intervention> findByRoadSegmentIdAndStatusIn(UUID roadSegmentId, List<Intervention.Status> statuses);
 	boolean existsByRoadSegmentIdAndStatusNot(UUID roadSegmentId, Intervention.Status status);

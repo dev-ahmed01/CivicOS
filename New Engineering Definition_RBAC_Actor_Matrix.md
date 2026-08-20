@@ -721,17 +721,19 @@ ALLOWED
 | DRAFT | Agency User | Edit |
 | DRAFT | Agency User | Submit |
 | SUBMITTED | Reviewer | Review |
+| UNDER_REVIEW | Engineer/System | Begin analysis |
 | ANALYSIS | Engineer/System | Analyse |
 | COORDINATION_REQUIRED | Coordinator | Coordinate |
-| COORDINATION_IN_PROGRESS | Coordinator | Update |
-| READY_FOR_APPROVAL | System | Create approval request |
+| COORDINATION_REQUIRED | Coordinator | Complete coordination |
+| COORDINATION_COMPLETE | Agency User/Coordinator | Create approval request |
 | APPROVAL_PENDING | Approver | Approve |
 | APPROVAL_PENDING | Approver | Reject |
 | APPROVAL_PENDING | Approver | Return |
 | APPROVED | Agency/Contractor | Schedule/prepare |
 | SCHEDULED | Agency/Contractor | Start when authorised |
 | IN_PROGRESS | Agency/Contractor | Complete |
-| RESTORATION | Agency/Contractor | Submit restoration |
+| RESTORATION | Agency/Contractor | Complete restoration |
+| EVIDENCE_PENDING | Agency/Contractor | Submit accepted evidence |
 | VERIFICATION_PENDING | Inspector | Inspect |
 | VERIFIED | System / configured authority | Close |
 | CLOSED | Authorised authority | Reopen when valid |

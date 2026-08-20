@@ -9,6 +9,7 @@ import org.hibernate.annotations.CreationTimestamp;
 
 import com.civicos.common.persistence.AbstractUuidEntity;
 import com.civicos.common.domain.DomainValidationException;
+import com.civicos.common.domain.DomainConflictException;
 import com.civicos.common.validation.ValidationRules;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.road.domain.RoadSegment;
@@ -129,6 +130,19 @@ public class Conflict extends AbstractUuidEntity {
 	public String getExplanation() { return explanation; }
 	public long getVersion() { return version; }
 	public Set<Intervention> getInterventions() { return Set.copyOf(interventions); }
+
+	public void resolve(Status outcome, Instant occurredAt) {
+		Status validatedOutcome = ValidationRules.required(outcome, "Conflict resolution outcome");
+		if (validatedOutcome != Status.RESOLVED && validatedOutcome != Status.DISMISSED) {
+			throw new DomainValidationException(
+					"Conflict resolution outcome must be RESOLVED or DISMISSED.");
+		}
+		if (status == Status.RESOLVED || status == Status.DISMISSED) {
+			throw new DomainConflictException("The conflict is already final.");
+		}
+		status = validatedOutcome;
+		resolvedAt = ValidationRules.required(occurredAt, "Conflict resolution time");
+	}
 
 	private void applyDetection(
 			Severity severity,

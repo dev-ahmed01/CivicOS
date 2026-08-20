@@ -681,9 +681,12 @@ Exception states include:
 REJECTED
 CANCELLED
 ON_HOLD
-REINSPECTION
 REOPENED
 ```
+
+`OVERDUE` is an SLA condition. `REINSPECTION` belongs to the Inspection
+workflow. `ON_HOLD` persists the previous eligible state so `RESUME` is
+deterministic.
 
 ## Every transition checks
 

@@ -129,7 +129,7 @@ public class InspectionService {
 			String reason,
 			String requestId,
 			String auditAction) {
-		if (intervention.getStatus() != Intervention.Status.COMPLETED_PENDING_VERIFICATION) {
+		if (intervention.getStatus() != Intervention.Status.VERIFICATION_PENDING) {
 			throw new DomainConflictException(
 					"Inspection requires an intervention pending verification.");
 		}

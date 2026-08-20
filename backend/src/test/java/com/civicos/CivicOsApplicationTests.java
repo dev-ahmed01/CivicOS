@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -60,8 +61,12 @@ import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.domain.DomainConflictException;
 import com.civicos.common.domain.DomainValidationException;
 import com.civicos.common.domain.StaleEntityVersionException;
+import com.civicos.common.application.DomainMutationResult;
+import com.civicos.common.web.ApiIdempotencyService;
 import com.civicos.conflict.application.ConflictAnalysisResult;
 import com.civicos.conflict.application.ConflictDetectionService;
+import com.civicos.conflict.application.ConflictResolutionResult;
+import com.civicos.conflict.application.ConflictResolutionService;
 import com.civicos.conflict.domain.Conflict;
 import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
@@ -146,6 +151,7 @@ class CivicOsApplicationTests {
 			"audit_events",
 			"ai_runs",
 			"ai_recommendations",
+			"api_idempotency_keys",
 			"refresh_tokens");
 
 	@Container
@@ -211,6 +217,9 @@ class CivicOsApplicationTests {
 	private ConflictDetectionService conflictDetectionService;
 
 	@Autowired
+	private ConflictResolutionService conflictResolutionService;
+
+	@Autowired
 	private ApprovalService approvalService;
 
 	@Autowired
@@ -245,6 +254,9 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private AiRecommendationReviewService aiRecommendationReviewService;
+
+	@Autowired
+	private ApiIdempotencyService apiIdempotencyService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -332,6 +344,69 @@ class CivicOsApplicationTests {
 				.andExpect(header().string("X-Request-Id", "phase-4-unauthenticated"))
 				.andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
 				.andExpect(jsonPath("$.requestId").value("phase-4-unauthenticated"));
+	}
+
+	@Test
+	void openApiDocumentsBearerSecurityErrorsPaginationAndWorkflowCommands() throws Exception {
+		mockMvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.info.title").value("CivicOS API"))
+				.andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type").value("http"))
+				.andExpect(jsonPath("$.components.schemas.ApiError").exists())
+				.andExpect(jsonPath("$.components.schemas.PagedResponseInterventionResponse").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/interventions'].get.parameters").isArray())
+				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/actions/{action}'].post.responses['409'].content['application/json'].schema['$ref']")
+						.value("#/components/schemas/ApiError"));
+	}
+
+	@Test
+	void interventionApiRejectsUnboundedPaginationWithCanonicalError() throws Exception {
+		TestUser admin = createUser("ADMIN", "ACTIVE", "INTERVENTION_VIEW", "ADMIN_OVERRIDE");
+		String accessToken = login(admin).get("accessToken").asText();
+
+		mockMvc.perform(get("/api/v1/interventions")
+					.header("Authorization", "Bearer " + accessToken)
+					.header("X-Request-Id", "phase-12-page-limit")
+					.param("size", "101"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("DOMAIN_VALIDATION_FAILED"))
+				.andExpect(jsonPath("$.requestId").value("phase-12-page-limit"));
+	}
+
+	@Test
+	void apiIdempotencyReplaysResponseAndRejectsKeyReuseForAnotherRequest() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_CREATE");
+		String key = "phase12-" + UUID.randomUUID();
+		AtomicInteger invocations = new AtomicInteger();
+		DomainMutationResult expected = new DomainMutationResult(
+				"INTERVENTION", fixture.interventionId(), "TEST", 3,
+				Instant.parse("2026-08-20T10:00:00Z"));
+
+		DomainMutationResult first = apiIdempotencyService.execute(
+				key, "PHASE_12_TEST", Map.of("value", 1), DomainMutationResult.class,
+				() -> {
+					invocations.incrementAndGet();
+					return expected;
+				});
+		DomainMutationResult replay = apiIdempotencyService.execute(
+				key, "PHASE_12_TEST", Map.of("value", 1), DomainMutationResult.class,
+				() -> {
+					invocations.incrementAndGet();
+					return expected;
+				});
+
+		assertThat(first).isEqualTo(expected);
+		assertThat(replay).isEqualTo(expected);
+		assertThat(invocations).hasValue(1);
+		assertThat(jdbcTemplate.queryForObject(
+				"select count(*) from api_idempotency_keys where user_id = ? and idempotency_key = ?",
+				Integer.class, fixture.actorId(), key)).isEqualTo(1);
+		assertThatThrownBy(() -> apiIdempotencyService.execute(
+				key, "PHASE_12_TEST", Map.of("value", 2), DomainMutationResult.class, () -> expected))
+				.isInstanceOf(DomainConflictException.class)
+				.hasMessageContaining("different request");
 	}
 
 	@Test
@@ -516,7 +591,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void creatorCannotApproveOwnIntervention() {
-		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", true);
+		WorkflowFixture fixture = createWorkflowFixture("APPROVAL_PENDING", true);
 		insertApproval(fixture.interventionId(), fixture.actorId());
 		authenticateWorkflowActor(
 				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_APPROVE");
@@ -532,7 +607,7 @@ class CivicOsApplicationTests {
 			assertThat(jdbcTemplate.queryForObject(
 					"select status from interventions where id = ?",
 					String.class,
-					fixture.interventionId())).isEqualTo("COORDINATION_REQUIRED");
+					fixture.interventionId())).isEqualTo("APPROVAL_PENDING");
 			assertThat(auditCount(fixture.interventionId())).isZero();
 		} finally {
 			SecurityContextHolder.clearContext();
@@ -541,7 +616,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void duplicateApprovalTransitionAllowsOnlyOneAuthoritativeMutation() {
-		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		WorkflowFixture fixture = createWorkflowFixture("APPROVAL_PENDING", false);
 		UUID secondActorId = createWorkflowUser(fixture.agencyId());
 		insertApproval(fixture.interventionId(), fixture.actorId());
 		insertApproval(fixture.interventionId(), secondActorId);
@@ -827,6 +902,58 @@ class CivicOsApplicationTests {
 	}
 
 	@Test
+	void conflictResolutionIsAuthoritativeAuditedAndConcurrencySafe() {
+		ConflictScenario scenario = createConflictScenario();
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "CONFLICT_ANALYSE");
+		UUID conflictId;
+		try {
+			conflictDetectionService.analyse(
+					scenario.targetId(), "phase-12-conflict-analysis");
+			conflictId = jdbcTemplate.queryForObject(
+					"""
+					select c.id
+					from conflicts c
+					join conflict_interventions ci on ci.conflict_id = c.id
+					where ci.intervention_id = ? and c.status = 'OPEN'
+					order by c.detected_at desc, c.id
+					limit 1
+					""",
+					UUID.class, scenario.targetId());
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "CONFLICT_RESOLVE");
+		try {
+			long currentVersion = jdbcTemplate.queryForObject(
+					"select version from conflicts where id = ?", Long.class, conflictId);
+			ConflictResolutionResult result = conflictResolutionService.resolve(
+					conflictId, Conflict.Status.RESOLVED, currentVersion,
+					"Agencies accepted the coordinated execution sequence.",
+					"phase-12-conflict-resolution");
+
+			assertThat(result.status()).isEqualTo(Conflict.Status.RESOLVED);
+			assertThat(result.version()).isEqualTo(currentVersion + 1);
+			assertThat(result.resolvedAt()).isNotNull();
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from conflicts where id = ?", String.class, conflictId))
+					.isEqualTo("RESOLVED");
+			assertThat(jdbcTemplate.queryForObject(
+					"select reason from audit_events where entity_id = ? and action = 'CONFLICT_RESOLVED'",
+					String.class, conflictId))
+					.isEqualTo("Agencies accepted the coordinated execution sequence.");
+			assertThatThrownBy(() -> conflictResolutionService.resolve(
+					conflictId, Conflict.Status.DISMISSED, currentVersion,
+					"Stale second decision", "phase-12-stale-conflict-resolution"))
+					.isInstanceOf(StaleEntityVersionException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
 	void isolatedInterventionProducesAuditedNoConflictOutcome() {
 		WorkflowFixture isolated = createWorkflowFixtureAt(
 				"DRAFT", "LINESTRING(83.00 22.00, 83.01 22.01)",
@@ -851,7 +978,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void approvalDecisionIsAuthoritativeAuditedAndConcurrencySafe() {
-		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_COMPLETE", false);
 		authenticateWorkflowActor(
 				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "APPROVAL_REQUEST");
 		try {
@@ -867,6 +994,9 @@ class CivicOsApplicationTests {
 					"phase-8-approval-decide");
 
 			assertThat(approved.status()).isEqualTo(Approval.Status.APPROVED);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class, fixture.interventionId())).isEqualTo("APPROVED");
 			assertThat(approved.version()).isEqualTo(1);
 			assertThat(jdbcTemplate.queryForObject(
 					"select count(*) from audit_events where entity_id = ?",
@@ -888,7 +1018,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void rejectedApprovalRequiresReasonAndRollsBackInvalidDecision() {
-		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		WorkflowFixture fixture = createWorkflowFixture("COORDINATION_COMPLETE", false);
 		authenticateWorkflowActor(
 				fixture.actorId(), fixture.agencyId(), "COORDINATOR", "APPROVAL_REQUEST");
 		try {
@@ -918,7 +1048,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void approvalGrantIsBlockedByDependenciesAndHighConflicts() {
-		WorkflowFixture target = createWorkflowFixture("COORDINATION_REQUIRED", false);
+		WorkflowFixture target = createWorkflowFixture("COORDINATION_COMPLETE", false);
 		WorkflowFixture prerequisite = createWorkflowFixture("DRAFT", false);
 		authenticateWorkflowActor(
 				target.actorId(), target.agencyId(), "COORDINATOR", "APPROVAL_REQUEST");
@@ -1035,7 +1165,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void evidenceUploadValidatesContentPreservesProvenanceAndRequiresIndependentReview() throws Exception {
-		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		WorkflowFixture fixture = createWorkflowFixture("VERIFICATION_PENDING", false);
 		byte[] png = pngEvidence();
 		authenticateWorkflowActor(
 				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "EVIDENCE_UPLOAD");
@@ -1094,7 +1224,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void inspectionsAreAssignedVersionedAndImmutableAfterCompletion() {
-		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		WorkflowFixture fixture = createWorkflowFixture("VERIFICATION_PENDING", false);
 		authenticateWorkflowActor(
 				fixture.actorId(), fixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
 		try {
@@ -1127,7 +1257,7 @@ class CivicOsApplicationTests {
 			SecurityContextHolder.clearContext();
 		}
 
-		WorkflowFixture selfInspection = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", true);
+		WorkflowFixture selfInspection = createWorkflowFixture("VERIFICATION_PENDING", true);
 		authenticateWorkflowActor(
 				selfInspection.actorId(), selfInspection.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
 		try {
@@ -1141,7 +1271,7 @@ class CivicOsApplicationTests {
 
 	@Test
 	void authoritativeVerificationRequiresAcceptedEvidenceAndTransitionsWorkflowAtomically() {
-		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		WorkflowFixture fixture = createWorkflowFixture("VERIFICATION_PENDING", false);
 		UUID inspectorId = createWorkflowUser(fixture.agencyId());
 		authenticateWorkflowActor(
 				inspectorId, fixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");

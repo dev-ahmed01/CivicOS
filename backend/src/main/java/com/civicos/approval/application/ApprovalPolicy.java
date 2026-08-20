@@ -43,9 +43,9 @@ public class ApprovalPolicy {
 			Intervention intervention,
 			UUID actorId,
 			Approval.Decision decision) {
-		if (intervention.getStatus() != Intervention.Status.COORDINATION_REQUIRED) {
+		if (intervention.getStatus() != Intervention.Status.APPROVAL_PENDING) {
 			throw new DomainConflictException(
-					"Approval requires the intervention to be in COORDINATION_REQUIRED state.");
+					"Approval requires the intervention to be in APPROVAL_PENDING state.");
 		}
 		if (intervention.getCreatedBy().getId().equals(actorId)) {
 			throw new SeparationOfDutiesException();

@@ -563,23 +563,35 @@ Intervention:
 DRAFT
 → SUBMITTED
 → UNDER_REVIEW
+→ ANALYSIS
 → COORDINATION_REQUIRED
+→ COORDINATION_COMPLETE
+→ APPROVAL_PENDING
 → APPROVED
 → SCHEDULED
 → IN_PROGRESS
-→ COMPLETED_PENDING_VERIFICATION
+→ RESTORATION
+→ EVIDENCE_PENDING
+→ VERIFICATION_PENDING
 → VERIFIED
 → CLOSED
 ```
 
-Correction:
+Exception transitions:
 
 ```text
-VERIFICATION_FAILED
-→ CORRECTIVE_ACTION
-→ IN_PROGRESS
-→ COMPLETED_PENDING_VERIFICATION
+APPROVAL_PENDING → REJECTED → DRAFT
+APPROVAL_PENDING → COORDINATION_REQUIRED     (returned for coordination)
+VERIFICATION_PENDING → REOPENED → RESTORATION
+CLOSED → REOPENED → RESTORATION
+eligible active state → ON_HOLD → prior stored state
+eligible non-terminal state → CANCELLED
 ```
+
+`OVERDUE` is an SLA condition, not an intervention state. `REINSPECTION`
+belongs to the inspection workflow, not the intervention lifecycle. This is
+the single authoritative intervention state machine for every CivicOS document,
+database constraint, backend service, API, seed scenario and UI.
 
 Invalid transitions must return a clear domain error.
 

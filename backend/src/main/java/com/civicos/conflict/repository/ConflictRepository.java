@@ -5,13 +5,20 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.repository.query.Param;
 
 import com.civicos.conflict.domain.Conflict;
 
-public interface ConflictRepository extends JpaRepository<Conflict, UUID> {
+import jakarta.persistence.LockModeType;
+
+public interface ConflictRepository extends JpaRepository<Conflict, UUID>, JpaSpecificationExecutor<Conflict> {
 	Optional<Conflict> findByConflictNumber(String conflictNumber);
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("select conflict from Conflict conflict where conflict.id = :id")
+	Optional<Conflict> findForUpdate(@Param("id") UUID id);
 	List<Conflict> findByStatusOrderByDetectedAtAsc(Conflict.Status status);
 	List<Conflict> findBySeverityAndStatus(Conflict.Severity severity, Conflict.Status status);
 

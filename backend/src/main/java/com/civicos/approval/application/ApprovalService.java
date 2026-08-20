@@ -27,6 +27,7 @@ import com.civicos.notification.application.NotificationRequest;
 import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
+import com.civicos.workflow.application.InterventionWorkflowService;
 
 @Service
 public class ApprovalService {
@@ -38,6 +39,7 @@ public class ApprovalService {
 	private final ScopedAuthorizationService authorizationService;
 	private final ApprovalPolicy approvalPolicy;
 	private final NotificationOutboxService notificationOutboxService;
+	private final InterventionWorkflowService workflowService;
 	private final Clock clock;
 
 	public ApprovalService(
@@ -48,6 +50,7 @@ public class ApprovalService {
 			ScopedAuthorizationService authorizationService,
 			ApprovalPolicy approvalPolicy,
 			NotificationOutboxService notificationOutboxService,
+			InterventionWorkflowService workflowService,
 			Clock clock) {
 		this.approvalRepository = approvalRepository;
 		this.interventionRepository = interventionRepository;
@@ -56,6 +59,7 @@ public class ApprovalService {
 		this.authorizationService = authorizationService;
 		this.approvalPolicy = approvalPolicy;
 		this.notificationOutboxService = notificationOutboxService;
+		this.workflowService = workflowService;
 		this.clock = clock;
 	}
 
@@ -66,9 +70,9 @@ public class ApprovalService {
 				PermissionCode.APPROVAL_REQUEST,
 				intervention.getAgency().getId(),
 				SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
-		if (intervention.getStatus() != Intervention.Status.COORDINATION_REQUIRED) {
+		if (intervention.getStatus() != Intervention.Status.COORDINATION_COMPLETE) {
 			throw new DomainConflictException(
-					"Approval can only be requested in COORDINATION_REQUIRED state.");
+					"Approval can only be requested in COORDINATION_COMPLETE state.");
 		}
 		if (approvalRepository.findByInterventionIdAndStatus(
 				interventionId, Approval.Status.PENDING).isPresent()) {
@@ -80,6 +84,9 @@ public class ApprovalService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				actor(principal), "APPROVAL_REQUESTED", "APPROVAL", approval.getId(),
 				null, state(approval), reason, requestId));
+		workflowService.transition(
+				interventionId, Intervention.WorkflowAction.REQUEST_APPROVAL,
+				intervention.getVersion(), reason, requestId);
 		notificationOutboxService.enqueue(new NotificationRequest(
 				"APPROVAL:" + approval.getId() + ":PENDING",
 				Notification.Type.APPROVAL_PENDING,
@@ -118,7 +125,18 @@ public class ApprovalService {
 		auditEventRepository.save(AuditEvent.domainMutation(
 				actor, "APPROVAL_DECIDED", "APPROVAL", approval.getId(),
 				before, state(approval), command.reason(), requestId));
+		workflowService.transition(
+				intervention.getId(), workflowAction(command.decision()),
+				intervention.getVersion(), command.reason(), requestId);
 		return result(approval, occurredAt);
+	}
+
+	private Intervention.WorkflowAction workflowAction(Approval.Decision decision) {
+		return switch (decision) {
+			case APPROVE, APPROVE_WITH_CONDITIONS -> Intervention.WorkflowAction.APPROVE;
+			case REJECT -> Intervention.WorkflowAction.REJECT;
+			case RETURN -> Intervention.WorkflowAction.RETURN_FOR_COORDINATION;
+		};
 	}
 
 	private PermissionCode permission(Approval.Decision decision) {
@@ -158,7 +176,7 @@ public class ApprovalService {
 	}
 
 	private Intervention intervention(UUID id) {
-		return interventionRepository.findById(id)
+		return interventionRepository.findForUpdate(id)
 				.orElseThrow(() -> new NoSuchElementException("Intervention not found: " + id));
 	}
 

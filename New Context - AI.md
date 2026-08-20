@@ -218,16 +218,18 @@ report the problem; the system routes it using rules and AI assistance.
 
 # 9. Road MVP Workflow
 
-Canonical road lifecycle:
+Canonical intervention lifecycle:
 
-REGISTERED → CONFLICT_ANALYSIS → COORDINATION_REQUIRED →
-COORDINATION_IN_PROGRESS → READY_FOR_APPROVAL → APPROVAL_PENDING →
-APPROVED → SCHEDULED → IMPLEMENTATION → RESTORATION → EVIDENCE_SUBMITTED
-→ INTERNAL_VERIFICATION → CITIZEN_VALIDATION → CLOSED →
-OUTCOME_MONITORING → SUSTAINED
+DRAFT → SUBMITTED → UNDER_REVIEW → ANALYSIS → COORDINATION_REQUIRED →
+COORDINATION_COMPLETE → APPROVAL_PENDING → APPROVED → SCHEDULED →
+IN_PROGRESS → RESTORATION → EVIDENCE_PENDING → VERIFICATION_PENDING →
+VERIFIED → CLOSED
 
-Exception states: - REJECTED - RETURNED - BLOCKED - OVERDUE - DISPUTED -
-ESCALATED - FAILED - REOPENED - CONFLICT_DETECTED
+Exception states: REJECTED, CANCELLED, ON_HOLD and REOPENED.
+
+`OVERDUE` is an SLA condition. Reinspection is part of the inspection
+workflow. Citizen validation and outcome monitoring are linked verification
+records and product views rather than intervention states.
 
 No arbitrary status mutation.
 

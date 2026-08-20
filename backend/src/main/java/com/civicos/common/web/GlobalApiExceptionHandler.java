@@ -8,11 +8,16 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import com.civicos.auth.application.InvalidRefreshTokenException;
 import com.civicos.common.domain.DomainConflictException;
@@ -90,9 +95,24 @@ public class GlobalApiExceptionHandler {
 		return error(HttpStatus.NOT_FOUND, "NOT_FOUND", exception.getMessage(), request);
 	}
 
-	@ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+	@ExceptionHandler({
+			MethodArgumentNotValidException.class,
+			HandlerMethodValidationException.class,
+			HttpMessageNotReadableException.class,
+			MethodArgumentTypeMismatchException.class,
+			MissingServletRequestParameterException.class,
+			MissingRequestHeaderException.class
+	})
 	ResponseEntity<ApiError> invalidRequest(Exception exception, HttpServletRequest request) {
 		return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "The request is invalid.", request);
+	}
+
+	@ExceptionHandler(MaxUploadSizeExceededException.class)
+	ResponseEntity<ApiError> uploadTooLarge(
+			MaxUploadSizeExceededException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.PAYLOAD_TOO_LARGE, "UPLOAD_TOO_LARGE",
+				"The uploaded file exceeds the configured limit.", request);
 	}
 
 	@ExceptionHandler(Exception.class)

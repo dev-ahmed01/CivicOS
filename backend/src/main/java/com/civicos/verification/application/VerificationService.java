@@ -96,7 +96,7 @@ public class VerificationService {
 
 		Intervention intervention = interventionRepository.findById(interventionId)
 				.orElseThrow(() -> new NoSuchElementException("Intervention not found: " + interventionId));
-		if (intervention.getStatus() != Intervention.Status.COMPLETED_PENDING_VERIFICATION) {
+		if (intervention.getStatus() != Intervention.Status.VERIFICATION_PENDING) {
 			throw new DomainConflictException(
 					"Authoritative verification requires an intervention pending verification.");
 		}

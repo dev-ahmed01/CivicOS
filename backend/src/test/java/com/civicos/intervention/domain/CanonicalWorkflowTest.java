@@ -30,21 +30,36 @@ class CanonicalWorkflowTest {
 
 	@Test
 	void interventionSupportsTheCanonicalCorrectionLoop() {
-		Intervention intervention = completedIntervention();
+		Intervention intervention = verificationPendingIntervention();
 
 		intervention.transition(Intervention.WorkflowAction.FAIL_VERIFICATION, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.BEGIN_CORRECTIVE_ACTION, OCCURRED_AT);
-		intervention.transition(Intervention.WorkflowAction.RESUME_CORRECTIVE_WORK, OCCURRED_AT);
-
-		assertThat(intervention.getStatus()).isEqualTo(Intervention.Status.IN_PROGRESS);
-		assertThat(intervention.getActualStart()).isEqualTo(OCCURRED_AT);
+		assertThat(intervention.getStatus()).isEqualTo(Intervention.Status.RESTORATION);
 		assertThat(intervention.getActualEnd()).isNull();
 
-		intervention.transition(Intervention.WorkflowAction.COMPLETE, OCCURRED_AT.plusSeconds(60));
-		intervention.transition(Intervention.WorkflowAction.VERIFY, OCCURRED_AT.plusSeconds(120));
-		intervention.transition(Intervention.WorkflowAction.CLOSE, OCCURRED_AT.plusSeconds(180));
+		intervention.transition(Intervention.WorkflowAction.COMPLETE_RESTORATION, OCCURRED_AT.plusSeconds(60));
+		intervention.transition(Intervention.WorkflowAction.SUBMIT_EVIDENCE, OCCURRED_AT.plusSeconds(120));
+		intervention.transition(Intervention.WorkflowAction.VERIFY, OCCURRED_AT.plusSeconds(180));
+		intervention.transition(Intervention.WorkflowAction.CLOSE, OCCURRED_AT.plusSeconds(240));
 
 		assertThat(intervention.getStatus()).isEqualTo(Intervention.Status.CLOSED);
+	}
+
+	@Test
+	void holdAndResumeRestoreTheExactPriorState() {
+		Intervention intervention = new Intervention();
+		intervention.transition(Intervention.WorkflowAction.SUBMIT, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.BEGIN_REVIEW, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.ANALYSE, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.REQUIRE_COORDINATION, OCCURRED_AT);
+
+		intervention.transition(Intervention.WorkflowAction.HOLD, OCCURRED_AT);
+		assertThat(intervention.getStatus()).isEqualTo(Intervention.Status.ON_HOLD);
+		assertThat(intervention.getHeldFromStatus()).isEqualTo(Intervention.Status.COORDINATION_REQUIRED);
+
+		intervention.transition(Intervention.WorkflowAction.RESUME, OCCURRED_AT);
+		assertThat(intervention.getStatus()).isEqualTo(Intervention.Status.COORDINATION_REQUIRED);
+		assertThat(intervention.getHeldFromStatus()).isNull();
 	}
 
 	@Test
@@ -59,15 +74,20 @@ class CanonicalWorkflowTest {
 		assertThat(intervention.getActualStart()).isNull();
 	}
 
-	private Intervention completedIntervention() {
+	private Intervention verificationPendingIntervention() {
 		Intervention intervention = new Intervention();
 		intervention.transition(Intervention.WorkflowAction.SUBMIT, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.BEGIN_REVIEW, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.ANALYSE, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.REQUIRE_COORDINATION, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.COMPLETE_COORDINATION, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.REQUEST_APPROVAL, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.APPROVE, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.SCHEDULE, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.START, OCCURRED_AT);
 		intervention.transition(Intervention.WorkflowAction.COMPLETE, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.COMPLETE_RESTORATION, OCCURRED_AT);
+		intervention.transition(Intervention.WorkflowAction.SUBMIT_EVIDENCE, OCCURRED_AT);
 		return intervention;
 	}
 }

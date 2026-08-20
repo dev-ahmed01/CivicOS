@@ -7,6 +7,8 @@ import java.util.NoSuchElementException;
 import java.util.UUID;
 
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +40,15 @@ public class NotificationService {
 				? notificationRepository.findByRecipientIdAndReadAtIsNullOrderByCreatedAtDesc(recipientId)
 				: notificationRepository.findByRecipientIdOrderByCreatedAtDesc(recipientId);
 		return notifications.stream().map(this::result).toList();
+	}
+
+	@Transactional(readOnly = true)
+	public Page<NotificationResult> listForCurrentUser(boolean unreadOnly, Pageable pageable) {
+		UUID recipientId = authorizationService.currentPrincipal().userId();
+		Page<Notification> notifications = unreadOnly
+				? notificationRepository.findByRecipientIdAndReadAtIsNull(recipientId, pageable)
+				: notificationRepository.findByRecipientId(recipientId, pageable);
+		return notifications.map(this::result);
 	}
 
 	@Transactional(readOnly = true)

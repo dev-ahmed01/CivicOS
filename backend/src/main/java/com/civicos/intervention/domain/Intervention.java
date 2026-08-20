@@ -1,6 +1,8 @@
 package com.civicos.intervention.domain;
 
 import java.time.Instant;
+import java.util.EnumSet;
+import java.util.Set;
 
 import org.locationtech.jts.geom.Geometry;
 
@@ -34,34 +36,61 @@ public class Intervention extends AbstractAuditableEntity {
 	}
 
 	public enum Status {
-		DRAFT, SUBMITTED, UNDER_REVIEW, COORDINATION_REQUIRED, APPROVED,
-		SCHEDULED, IN_PROGRESS, COMPLETED_PENDING_VERIFICATION,
-		VERIFICATION_FAILED, CORRECTIVE_ACTION, VERIFIED, CLOSED
+		DRAFT, SUBMITTED, UNDER_REVIEW, ANALYSIS, COORDINATION_REQUIRED,
+		COORDINATION_COMPLETE, APPROVAL_PENDING, APPROVED, SCHEDULED,
+		IN_PROGRESS, RESTORATION, EVIDENCE_PENDING, VERIFICATION_PENDING,
+		VERIFIED, CLOSED, REJECTED, CANCELLED, ON_HOLD, REOPENED
 	}
 
 	public enum WorkflowAction {
 		SUBMIT(Status.DRAFT, Status.SUBMITTED),
 		BEGIN_REVIEW(Status.SUBMITTED, Status.UNDER_REVIEW),
-		REQUIRE_COORDINATION(Status.UNDER_REVIEW, Status.COORDINATION_REQUIRED),
-		APPROVE(Status.COORDINATION_REQUIRED, Status.APPROVED),
+		ANALYSE(Status.UNDER_REVIEW, Status.ANALYSIS),
+		REQUIRE_COORDINATION(Status.ANALYSIS, Status.COORDINATION_REQUIRED),
+		COMPLETE_COORDINATION(Status.COORDINATION_REQUIRED, Status.COORDINATION_COMPLETE),
+		REQUEST_APPROVAL(Status.COORDINATION_COMPLETE, Status.APPROVAL_PENDING),
+		APPROVE(Status.APPROVAL_PENDING, Status.APPROVED),
+		REJECT(Status.APPROVAL_PENDING, Status.REJECTED),
+		RETURN_FOR_COORDINATION(Status.APPROVAL_PENDING, Status.COORDINATION_REQUIRED),
 		SCHEDULE(Status.APPROVED, Status.SCHEDULED),
 		START(Status.SCHEDULED, Status.IN_PROGRESS),
-		COMPLETE(Status.IN_PROGRESS, Status.COMPLETED_PENDING_VERIFICATION),
-		FAIL_VERIFICATION(Status.COMPLETED_PENDING_VERIFICATION, Status.VERIFICATION_FAILED),
-		BEGIN_CORRECTIVE_ACTION(Status.VERIFICATION_FAILED, Status.CORRECTIVE_ACTION),
-		RESUME_CORRECTIVE_WORK(Status.CORRECTIVE_ACTION, Status.IN_PROGRESS),
-		VERIFY(Status.COMPLETED_PENDING_VERIFICATION, Status.VERIFIED),
-		CLOSE(Status.VERIFIED, Status.CLOSED);
+		COMPLETE(Status.IN_PROGRESS, Status.RESTORATION),
+		COMPLETE_RESTORATION(Status.RESTORATION, Status.EVIDENCE_PENDING),
+		SUBMIT_EVIDENCE(Status.EVIDENCE_PENDING, Status.VERIFICATION_PENDING),
+		FAIL_VERIFICATION(Status.VERIFICATION_PENDING, Status.REOPENED),
+		BEGIN_CORRECTIVE_ACTION(Status.REOPENED, Status.RESTORATION),
+		VERIFY(Status.VERIFICATION_PENDING, Status.VERIFIED),
+		CLOSE(Status.VERIFIED, Status.CLOSED),
+		REOPEN_CLOSED(Status.CLOSED, Status.REOPENED),
+		REVISE_REJECTED(Status.REJECTED, Status.DRAFT),
+		HOLD(EnumSet.of(
+				Status.COORDINATION_REQUIRED, Status.COORDINATION_COMPLETE,
+				Status.APPROVED, Status.SCHEDULED, Status.IN_PROGRESS,
+				Status.RESTORATION, Status.EVIDENCE_PENDING,
+				Status.VERIFICATION_PENDING), Status.ON_HOLD),
+		RESUME(Status.ON_HOLD, null),
+		CANCEL(EnumSet.of(
+				Status.DRAFT, Status.SUBMITTED, Status.UNDER_REVIEW, Status.ANALYSIS,
+				Status.COORDINATION_REQUIRED, Status.COORDINATION_COMPLETE,
+				Status.APPROVAL_PENDING, Status.APPROVED, Status.SCHEDULED,
+				Status.IN_PROGRESS, Status.RESTORATION, Status.EVIDENCE_PENDING,
+				Status.VERIFICATION_PENDING, Status.ON_HOLD, Status.REOPENED),
+				Status.CANCELLED);
 
-		private final Status source;
+		private final Set<Status> sources;
 		private final Status target;
 
 		WorkflowAction(Status source, Status target) {
-			this.source = source;
+			this(EnumSet.of(source), target);
+		}
+
+		WorkflowAction(Set<Status> sources, Status target) {
+			this.sources = Set.copyOf(sources);
 			this.target = target;
 		}
 
-		public Status source() { return source; }
+		public Set<Status> sources() { return sources; }
+		public boolean supports(Status status) { return sources.contains(status); }
 		public Status target() { return target; }
 	}
 
@@ -103,6 +132,10 @@ public class Intervention extends AbstractAuditableEntity {
 
 	@Column(name = "actual_end")
 	private Instant actualEnd;
+
+	@Enumerated(EnumType.STRING)
+	@Column(name = "held_from_status", length = 60)
+	private Status heldFromStatus;
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false, length = 60)
@@ -174,21 +207,36 @@ public class Intervention extends AbstractAuditableEntity {
 	public Instant getPlannedEnd() { return plannedEnd; }
 	public Instant getActualStart() { return actualStart; }
 	public Instant getActualEnd() { return actualEnd; }
+	public Status getHeldFromStatus() { return heldFromStatus; }
 	public Status getStatus() { return status; }
 	public Priority getPriority() { return priority; }
 	public User getCreatedBy() { return createdBy; }
 	public long getVersion() { return version; }
 
 	public void transition(WorkflowAction action, Instant occurredAt) {
-		if (status != action.source()) {
+		if (!action.supports(status)) {
 			throw new WorkflowActionNotAllowedException("INTERVENTION", status.name(), action.name());
 		}
 
-		status = action.target();
+		Status previousStatus = status;
+		if (action == WorkflowAction.RESUME) {
+			if (heldFromStatus == null) {
+				throw new DomainConflictException("Held intervention has no resumable prior state.");
+			}
+			status = heldFromStatus;
+			heldFromStatus = null;
+		} else {
+			status = action.target();
+			if (action == WorkflowAction.HOLD) {
+				heldFromStatus = previousStatus;
+			} else if (action == WorkflowAction.CANCEL) {
+				heldFromStatus = null;
+			}
+		}
 		switch (action) {
 			case START -> actualStart = occurredAt;
-			case COMPLETE -> actualEnd = occurredAt;
-			case RESUME_CORRECTIVE_WORK -> actualEnd = null;
+			case COMPLETE_RESTORATION -> actualEnd = occurredAt;
+			case FAIL_VERIFICATION, REOPEN_CLOSED -> actualEnd = null;
 			default -> {
 				// The remaining transitions do not alter execution timestamps.
 			}

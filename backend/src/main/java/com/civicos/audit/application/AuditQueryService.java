@@ -7,6 +7,8 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import com.civicos.audit.domain.AuditEvent;
 import com.civicos.audit.repository.AuditEventRepository;
@@ -53,6 +55,18 @@ public class AuditQueryService {
 		}
 		events.forEach(event -> visibilityPolicy.assertVisible(event, principal));
 		return events.stream().map(this::result).toList();
+	}
+
+	@Transactional(readOnly = true)
+	public Page<AuditEventResult> entityTrail(String entityType, UUID entityId, Pageable pageable) {
+		String normalizedType = ValidationRules.requiredText(entityType, "Audit entity type")
+				.toUpperCase(Locale.ROOT);
+		ValidationRules.required(entityId, "Audit entity id");
+		CivicPrincipal principal = principal();
+		Page<AuditEvent> events = auditEventRepository
+				.findByEntityTypeAndEntityId(normalizedType, entityId, pageable);
+		events.forEach(event -> visibilityPolicy.assertVisible(event, principal));
+		return events.map(this::result);
 	}
 
 	private CivicPrincipal principal() {

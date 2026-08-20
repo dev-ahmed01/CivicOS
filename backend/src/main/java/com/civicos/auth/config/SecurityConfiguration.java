@@ -54,6 +54,7 @@ public class SecurityConfiguration {
 								"/api/v1/auth/refresh",
 								"/api/v1/auth/logout").permitAll()
 						.requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+						.requestMatchers("/v3/api-docs/**", "/swagger-ui.html", "/swagger-ui/**").permitAll()
 						.anyRequest().authenticated())
 				.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt ->
 						jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)))

@@ -20,6 +20,8 @@ import com.civicos.auth.domain.SystemRole;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.conflict.domain.Conflict;
 import com.civicos.conflict.repository.ConflictRepository;
+import com.civicos.evidence.domain.Evidence;
+import com.civicos.evidence.repository.EvidenceRepository;
 import com.civicos.intervention.domain.Intervention;
 import com.civicos.intervention.repository.InterventionRepository;
 import com.civicos.notification.application.NotificationOutboxService;
@@ -28,6 +30,7 @@ import com.civicos.notification.domain.Notification;
 import com.civicos.user.domain.User;
 import com.civicos.user.repository.UserRepository;
 import com.civicos.verification.domain.Verification;
+import com.civicos.verification.config.VerificationPolicyProperties;
 import com.civicos.verification.repository.VerificationRepository;
 import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
@@ -52,10 +55,12 @@ public class InterventionWorkflowService {
 	private final ApprovalRepository approvalRepository;
 	private final VerificationRepository verificationRepository;
 	private final ConflictRepository conflictRepository;
+	private final EvidenceRepository evidenceRepository;
 	private final AuditEventRepository auditEventRepository;
 	private final UserRepository userRepository;
 	private final WorkflowAuthorizationPolicy authorizationPolicy;
 	private final NotificationOutboxService notificationOutboxService;
+	private final VerificationPolicyProperties verificationPolicy;
 	private final Clock clock;
 
 	public InterventionWorkflowService(
@@ -63,19 +68,23 @@ public class InterventionWorkflowService {
 			ApprovalRepository approvalRepository,
 			VerificationRepository verificationRepository,
 			ConflictRepository conflictRepository,
+			EvidenceRepository evidenceRepository,
 			AuditEventRepository auditEventRepository,
 			UserRepository userRepository,
 			WorkflowAuthorizationPolicy authorizationPolicy,
 			NotificationOutboxService notificationOutboxService,
+			VerificationPolicyProperties verificationPolicy,
 			Clock clock) {
 		this.interventionRepository = interventionRepository;
 		this.approvalRepository = approvalRepository;
 		this.verificationRepository = verificationRepository;
 		this.conflictRepository = conflictRepository;
+		this.evidenceRepository = evidenceRepository;
 		this.auditEventRepository = auditEventRepository;
 		this.userRepository = userRepository;
 		this.authorizationPolicy = authorizationPolicy;
 		this.notificationOutboxService = notificationOutboxService;
+		this.verificationPolicy = verificationPolicy;
 		this.clock = clock;
 	}
 
@@ -94,7 +103,8 @@ public class InterventionWorkflowService {
 		assertBusinessPreconditions(intervention, action, principal.userId());
 
 		Instant transitionedAt = clock.instant();
-		Map<String, Object> beforeState = state(intervention.getStatus().name(), intervention.getVersion());
+		String previousStatus = intervention.getStatus().name();
+		Map<String, Object> beforeState = state(previousStatus, intervention.getVersion());
 		intervention.transition(action, transitionedAt);
 		interventionRepository.saveAndFlush(intervention);
 		Map<String, Object> afterState = state(intervention.getStatus().name(), intervention.getVersion());
@@ -116,8 +126,8 @@ public class InterventionWorkflowService {
 				"INTERVENTION",
 				intervention.getId(),
 				action.name(),
-				action.source().name(),
-				action.target().name(),
+				previousStatus,
+				intervention.getStatus().name(),
 				intervention.getVersion(),
 				transitionedAt);
 	}
@@ -127,7 +137,7 @@ public class InterventionWorkflowService {
 		Notification.Type type = switch (action) {
 			case SUBMIT -> Notification.Type.INTERVENTION_SUBMITTED;
 			case START -> Notification.Type.WORK_STARTED;
-			case COMPLETE -> Notification.Type.VERIFICATION_REQUESTED;
+			case SUBMIT_EVIDENCE -> Notification.Type.VERIFICATION_REQUESTED;
 			case FAIL_VERIFICATION -> Notification.Type.VERIFICATION_FAILED;
 			case BEGIN_CORRECTIVE_ACTION -> Notification.Type.INTERVENTION_REOPENED;
 			default -> null;
@@ -160,10 +170,23 @@ public class InterventionWorkflowService {
 					PermissionCode.INTERVENTION_SUBMIT, agencyId, SystemRole.AGENCY_OFFICER);
 			case BEGIN_REVIEW -> authorizationPolicy.authorize(
 					PermissionCode.INTERVENTION_UPDATE, agencyId, SystemRole.COORDINATOR);
+			case ANALYSE -> authorizationPolicy.authorize(
+					PermissionCode.CONFLICT_ANALYSE, agencyId, SystemRole.COORDINATOR);
 			case REQUIRE_COORDINATION -> authorizationPolicy.authorize(
 					PermissionCode.COORDINATION_UPDATE, agencyId, SystemRole.COORDINATOR);
+			case COMPLETE_COORDINATION -> authorizationPolicy.authorize(
+					PermissionCode.COORDINATION_COMPLETE, agencyId, SystemRole.COORDINATOR);
+			case REQUEST_APPROVAL -> authorizationPolicy.authorize(
+					PermissionCode.APPROVAL_REQUEST, agencyId,
+					SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
 			case APPROVE -> authorizationPolicy.authorize(
 					PermissionCode.APPROVAL_APPROVE, agencyId,
+					SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
+			case REJECT -> authorizationPolicy.authorize(
+					PermissionCode.APPROVAL_REJECT, agencyId,
+					SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
+			case RETURN_FOR_COORDINATION -> authorizationPolicy.authorize(
+					PermissionCode.APPROVAL_RETURN, agencyId,
 					SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
 			case SCHEDULE -> authorizationPolicy.authorize(
 					PermissionCode.INTERVENTION_SCHEDULE, agencyId, SystemRole.AGENCY_OFFICER);
@@ -171,12 +194,19 @@ public class InterventionWorkflowService {
 					PermissionCode.INTERVENTION_START, agencyId, SystemRole.AGENCY_OFFICER);
 			case COMPLETE -> authorizationPolicy.authorize(
 					PermissionCode.INTERVENTION_COMPLETE, agencyId, SystemRole.AGENCY_OFFICER);
+			case COMPLETE_RESTORATION, SUBMIT_EVIDENCE -> authorizationPolicy.authorize(
+					PermissionCode.INTERVENTION_COMPLETE, agencyId, SystemRole.AGENCY_OFFICER);
 			case FAIL_VERIFICATION -> authorizationPolicy.authorize(
 					PermissionCode.VERIFICATION_FAIL, agencyId, SystemRole.INSPECTOR);
-			case BEGIN_CORRECTIVE_ACTION -> authorizationPolicy.authorize(
-					PermissionCode.INTERVENTION_UPDATE, agencyId, SystemRole.AGENCY_OFFICER);
-			case RESUME_CORRECTIVE_WORK -> authorizationPolicy.authorize(
+			case HOLD -> authorizationPolicy.authorize(
+					PermissionCode.INTERVENTION_HOLD, agencyId, SystemRole.AGENCY_OFFICER);
+			case RESUME -> authorizationPolicy.authorize(
 					PermissionCode.INTERVENTION_RESUME, agencyId, SystemRole.AGENCY_OFFICER);
+			case CANCEL -> authorizationPolicy.authorize(
+					PermissionCode.INTERVENTION_CANCEL, agencyId, SystemRole.AGENCY_OFFICER);
+			case REOPEN_CLOSED, BEGIN_CORRECTIVE_ACTION, REVISE_REJECTED -> authorizationPolicy.authorize(
+					PermissionCode.INTERVENTION_REOPEN, agencyId,
+					SystemRole.AGENCY_OFFICER, SystemRole.COORDINATOR);
 			case VERIFY -> authorizationPolicy.authorize(
 					PermissionCode.VERIFICATION_PASS, agencyId, SystemRole.INSPECTOR);
 			case CLOSE -> authorizationPolicy.authorize(
@@ -193,7 +223,7 @@ public class InterventionWorkflowService {
 	}
 
 	private void assertCurrentState(Intervention intervention, Intervention.WorkflowAction action) {
-		if (intervention.getStatus() != action.source()) {
+		if (!action.supports(intervention.getStatus())) {
 			throw new WorkflowActionNotAllowedException(
 					"INTERVENTION", intervention.getStatus().name(), action.name());
 		}
@@ -204,13 +234,56 @@ public class InterventionWorkflowService {
 			Intervention.WorkflowAction action,
 			UUID actorId) {
 		switch (action) {
+			case COMPLETE_COORDINATION -> assertNoBlockingConflict(intervention);
+			case REQUEST_APPROVAL -> assertPendingApproval(intervention);
 			case APPROVE -> assertApprovalPreconditions(intervention, actorId);
+			case REJECT -> assertApprovalDecision(intervention, actorId, Approval.Status.REJECTED);
+			case RETURN_FOR_COORDINATION -> assertApprovalDecision(
+					intervention, actorId, Approval.Status.RETURNED);
+			case SUBMIT_EVIDENCE -> assertRequiredEvidence(intervention.getId());
 			case VERIFY -> assertVerification(intervention.getId(), actorId, SUCCESSFUL_VERIFICATIONS);
 			case FAIL_VERIFICATION -> assertVerification(intervention.getId(), actorId, FAILED_VERIFICATIONS);
 			case CLOSE -> assertAnySuccessfulVerification(intervention.getId());
 			default -> {
 				// The state graph itself supplies the remaining preconditions in Phase 5.
 			}
+		}
+	}
+
+	private void assertRequiredEvidence(UUID interventionId) {
+		List<Evidence.Type> missing = verificationPolicy.getRequiredEvidenceTypes().stream()
+				.filter(type -> !evidenceRepository.existsByTargetTypeAndTargetIdAndTypeAndStatus(
+						"INTERVENTION", interventionId, type, Evidence.Status.ACCEPTED))
+				.sorted()
+				.toList();
+		if (!missing.isEmpty()) {
+			throw new WorkflowPreconditionException(
+					"Required accepted evidence is missing: " + missing);
+		}
+	}
+
+	private void assertNoBlockingConflict(Intervention intervention) {
+		if (conflictRepository.existsBlockingConflict(
+				intervention.getId(), Conflict.Severity.HIGH, BLOCKING_CONFLICT_STATES)) {
+			throw new WorkflowPreconditionException(
+					"Coordination cannot complete while a HIGH conflict remains unresolved.");
+		}
+	}
+
+	private void assertPendingApproval(Intervention intervention) {
+		if (approvalRepository.findByInterventionIdAndStatus(
+				intervention.getId(), Approval.Status.PENDING).isEmpty()) {
+			throw new WorkflowPreconditionException(
+					"A pending approval request is required before APPROVAL_PENDING.");
+		}
+	}
+
+	private void assertApprovalDecision(
+			Intervention intervention, UUID actorId, Approval.Status status) {
+		if (!approvalRepository.existsByInterventionIdAndActorIdAndStatusIn(
+				intervention.getId(), actorId, List.of(status))) {
+			throw new WorkflowPreconditionException(
+					"The current actor's authoritative approval decision is required.");
 		}
 	}
 

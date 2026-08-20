@@ -626,15 +626,17 @@ The workflow engine controls lifecycle transitions.
 Example:
 
 ``` text
-REGISTERED
+DRAFT
      ↓
-CONFLICT_ANALYSIS
+SUBMITTED
+     ↓
+UNDER_REVIEW
+     ↓
+ANALYSIS
      ↓
 COORDINATION_REQUIRED
      ↓
-COORDINATION_IN_PROGRESS
-     ↓
-READY_FOR_APPROVAL
+COORDINATION_COMPLETE
      ↓
 APPROVAL_PENDING
      ↓
@@ -642,20 +644,22 @@ APPROVED
      ↓
 SCHEDULED
      ↓
-IMPLEMENTATION
+IN_PROGRESS
      ↓
 RESTORATION
      ↓
-EVIDENCE_SUBMITTED
+EVIDENCE_PENDING
      ↓
-INTERNAL_VERIFICATION
+VERIFICATION_PENDING
      ↓
-CITIZEN_VALIDATION
+VERIFIED
      ↓
 CLOSED
-     ↓
-OUTCOME_MONITORING
 ```
+
+Citizen validation and outcome monitoring remain linked records/views rather
+than intervention states. `OVERDUE` is represented by SLA status. Exception
+states are `REJECTED`, `CANCELLED`, `ON_HOLD` and `REOPENED`.
 
 Every transition must be validated.
 

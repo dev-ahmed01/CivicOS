@@ -17,9 +17,11 @@ import com.civicos.common.web.CorrelationIdFilter;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 
 @RestController
 @RequestMapping("/api/v1/auth")
+@SecurityRequirements
 public class AuthController {
 
 	private final AuthenticationService authenticationService;
