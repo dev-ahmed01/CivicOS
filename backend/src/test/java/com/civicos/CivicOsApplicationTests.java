@@ -43,6 +43,9 @@ import com.civicos.intervention.repository.InterventionRepository;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.domain.DomainConflictException;
+import com.civicos.conflict.application.ConflictAnalysisResult;
+import com.civicos.conflict.application.ConflictDetectionService;
+import com.civicos.conflict.domain.Conflict;
 import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
 import com.civicos.dependency.domain.Dependency;
@@ -157,6 +160,9 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private DependencyManagementService dependencyManagementService;
+
+	@Autowired
+	private ConflictDetectionService conflictDetectionService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -649,8 +655,14 @@ class CivicOsApplicationTests {
 					.isInstanceOf(DomainConflictException.class)
 					.hasMessageContaining("cycle");
 			assertThat(jdbcTemplate.queryForObject(
-					"select count(*) from dependencies where required = true",
-					Integer.class)).isEqualTo(2);
+					"""
+					select count(*) from dependencies
+					where required = true
+					  and source_intervention_id in (?, ?, ?)
+					""",
+					Integer.class,
+					first.interventionId(), second.interventionId(), third.interventionId()))
+					.isEqualTo(2);
 			var cancelled = dependencyManagementService.cancel(
 					firstDependency.entityId(),
 					0,
@@ -662,6 +674,94 @@ class CivicOsApplicationTests {
 					String.class,
 					firstDependency.entityId())).isEqualTo("CANCELLED");
 			assertThat(auditCount(firstDependency.entityId())).isEqualTo(2);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void deterministicConflictAnalysisFindsCanonicalRisksAndIsIdempotent() {
+		ConflictScenario scenario = createConflictScenario();
+		authenticateWorkflowActor(
+				scenario.actorId(), scenario.actorAgencyId(), "COORDINATOR", "CONFLICT_ANALYSE");
+		try {
+			ConflictAnalysisResult first = conflictDetectionService.analyse(
+					scenario.targetId(), "phase-7-primary-analysis-one");
+			Set<Conflict.Type> types = first.conflicts().stream()
+					.map(ConflictAnalysisResult.DetectedConflict::type)
+					.collect(java.util.stream.Collectors.toSet());
+
+			assertThat(first.outcome()).isEqualTo(ConflictAnalysisResult.Outcome.CONFLICTS_DETECTED);
+			assertThat(types).contains(
+					Conflict.Type.SAME_ROAD_OVERLAP,
+					Conflict.Type.SPATIAL_OVERLAP,
+					Conflict.Type.TEMPORAL_OVERLAP,
+					Conflict.Type.UNSAFE_SEQUENCING,
+					Conflict.Type.RESTORATION_BEFORE_EXCAVATION_COMPLETION,
+					Conflict.Type.REPEAT_DIGGING_RISK,
+					Conflict.Type.MULTI_AGENCY_COORDINATION);
+			assertThat(first.conflicts()).filteredOn(result ->
+					result.type() == Conflict.Type.RESTORATION_BEFORE_EXCAVATION_COMPLETION)
+					.allMatch(result -> result.severity() == Conflict.Severity.HIGH);
+			assertThat(first.conflicts()).filteredOn(result ->
+					result.type() == Conflict.Type.REPEAT_DIGGING_RISK)
+					.allMatch(result -> result.severity() == Conflict.Severity.MEDIUM);
+			assertThat(first.conflicts()).filteredOn(result ->
+					result.type() == Conflict.Type.MULTI_AGENCY_COORDINATION)
+					.allMatch(result -> result.severity() == Conflict.Severity.HIGH);
+
+			int persistedAfterFirstRun = conflictCountFor(scenario.targetId());
+			UUID humanResolvedConflictId = first.conflicts().getFirst().conflictId();
+			jdbcTemplate.update(
+					"update conflicts set status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP where id = ?",
+					humanResolvedConflictId);
+			ConflictAnalysisResult second = conflictDetectionService.analyse(
+					scenario.targetId(), "phase-7-primary-analysis-two");
+
+			assertThat(second.conflicts())
+					.extracting(ConflictAnalysisResult.DetectedConflict::conflictNumber)
+					.containsExactlyInAnyOrderElementsOf(first.conflicts().stream()
+							.map(ConflictAnalysisResult.DetectedConflict::conflictNumber)
+							.toList());
+			assertThat(second.conflicts())
+					.anyMatch(result -> result.persistenceAction()
+							== ConflictAnalysisResult.PersistenceAction.HUMAN_DECISION_PRESERVED)
+					.allMatch(result -> result.persistenceAction()
+							== ConflictAnalysisResult.PersistenceAction.UNCHANGED
+							|| result.persistenceAction()
+							== ConflictAnalysisResult.PersistenceAction.HUMAN_DECISION_PRESERVED);
+			assertThat(conflictCountFor(scenario.targetId())).isEqualTo(persistedAfterFirstRun);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from conflicts where id = ?",
+					String.class,
+					humanResolvedConflictId)).isEqualTo("RESOLVED");
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id = ? and action = 'CONFLICT_ANALYSIS_COMPLETED'",
+					Integer.class,
+					scenario.targetId())).isEqualTo(2);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void isolatedInterventionProducesAuditedNoConflictOutcome() {
+		WorkflowFixture isolated = createWorkflowFixtureAt(
+				"DRAFT", "LINESTRING(83.00 22.00, 83.01 22.01)",
+				"2029-01-01T08:00:00Z", "2029-01-02T08:00:00Z", "ROADWORK");
+		authenticateWorkflowActor(
+				isolated.actorId(), isolated.agencyId(), "COORDINATOR", "CONFLICT_ANALYSE");
+		try {
+			ConflictAnalysisResult result = conflictDetectionService.analyse(
+					isolated.interventionId(), "phase-7-no-conflict");
+
+			assertThat(result.outcome()).isEqualTo(ConflictAnalysisResult.Outcome.NO_CONFLICT);
+			assertThat(result.conflicts()).isEmpty();
+			assertThat(conflictCountFor(isolated.interventionId())).isZero();
+			assertThat(jdbcTemplate.queryForObject(
+					"select after_state ->> 'outcome' from audit_events where entity_id = ? and action = 'CONFLICT_ANALYSIS_COMPLETED'",
+					String.class,
+					isolated.interventionId())).isEqualTo("NO_CONFLICT");
 		} finally {
 			SecurityContextHolder.clearContext();
 		}
@@ -709,6 +809,32 @@ class CivicOsApplicationTests {
 	}
 
 	private WorkflowFixture createWorkflowFixture(String status, boolean actorIsCreator) {
+		return createWorkflowFixtureAt(
+				status,
+				"LINESTRING(78.00 13.50, 78.01 13.51)",
+				"2026-08-20T08:00:00Z",
+				"2026-08-21T08:00:00Z",
+				"ROADWORK",
+				actorIsCreator);
+	}
+
+	private WorkflowFixture createWorkflowFixtureAt(
+			String status,
+			String geometryWkt,
+			String plannedStart,
+			String plannedEnd,
+			String interventionType) {
+		return createWorkflowFixtureAt(
+				status, geometryWkt, plannedStart, plannedEnd, interventionType, false);
+	}
+
+	private WorkflowFixture createWorkflowFixtureAt(
+			String status,
+			String geometryWkt,
+			String plannedStart,
+			String plannedEnd,
+			String interventionType,
+			boolean actorIsCreator) {
 		UUID agencyId = UUID.randomUUID();
 		jdbcTemplate.update(
 				"insert into agencies (id, code, name, agency_type) values (?, ?, ?, 'GOVERNMENT')",
@@ -720,9 +846,9 @@ class CivicOsApplicationTests {
 		jdbcTemplate.update(
 				"""
 				insert into roads (id, external_reference, name, classification, geometry)
-				values (?, ?, ?, 'LOCAL', ST_GeomFromText('MULTILINESTRING((78.00 13.50, 78.01 13.51))', 4326))
+				values (?, ?, ?, 'LOCAL', ST_Multi(ST_GeomFromText(?, 4326)))
 				""",
-				roadId, "ROAD-" + roadId, "Workflow Road " + roadId);
+				roadId, "ROAD-" + roadId, "Workflow Road " + roadId, geometryWkt);
 		UUID roadSegmentId = UUID.randomUUID();
 		jdbcTemplate.update(
 				"""
@@ -730,9 +856,10 @@ class CivicOsApplicationTests {
 				    id, road_id, external_reference, name, classification,
 				    surface_type, length_meters, geometry)
 				values (?, ?, ?, ?, 'LOCAL', 'BITUMINOUS', 100,
-				        ST_GeomFromText('LINESTRING(78.00 13.50, 78.01 13.51)', 4326))
+				        ST_GeomFromText(?, 4326))
 				""",
-				roadSegmentId, roadId, "SEG-" + roadSegmentId, "Workflow Segment " + roadSegmentId);
+				roadSegmentId, roadId, "SEG-" + roadSegmentId, "Workflow Segment " + roadSegmentId,
+				geometryWkt);
 		UUID caseId = UUID.randomUUID();
 		jdbcTemplate.update(
 				"""
@@ -747,13 +874,72 @@ class CivicOsApplicationTests {
 				    id, intervention_number, case_id, agency_id, intervention_type,
 				    description, road_segment_id, geometry, planned_start, planned_end,
 				    status, created_by)
-				values (?, ?, ?, ?, 'ROADWORK', 'Phase 5 workflow fixture', ?,
-				        ST_GeomFromText('LINESTRING(78.00 13.50, 78.01 13.51)', 4326),
-				        '2026-08-20T08:00:00Z', '2026-08-21T08:00:00Z', ?, ?)
+				values (?, ?, ?, ?, ?, 'Phase 5 workflow fixture', ?,
+				        ST_GeomFromText(?, 4326), ?::timestamptz, ?::timestamptz, ?, ?)
 				""",
-				interventionId, "INT-" + interventionId, caseId, agencyId,
-				roadSegmentId, status, creatorId);
+				interventionId, "INT-" + interventionId, caseId, agencyId, interventionType,
+				roadSegmentId, geometryWkt, plannedStart, plannedEnd, status, creatorId);
 		return new WorkflowFixture(interventionId, caseId, roadSegmentId, agencyId, actorId);
+	}
+
+	private ConflictScenario createConflictScenario() {
+		WorkflowFixture restoration = createWorkflowFixtureAt(
+				"DRAFT", "LINESTRING(80.00 16.00, 80.01 16.01)",
+				"2027-02-05T08:00:00Z", "2027-02-06T08:00:00Z", "RESTORATION");
+		insertScenarioIntervention(restoration, "UTILITY_EXCAVATION",
+				"2027-02-01T08:00:00Z", "2027-02-07T08:00:00Z");
+		UUID lateExcavation = insertScenarioIntervention(restoration, "WATER",
+				"2027-02-08T08:00:00Z", "2027-02-09T08:00:00Z");
+		insertScenarioIntervention(restoration, "TELECOM",
+				"2027-02-10T08:00:00Z", "2027-02-11T08:00:00Z");
+		jdbcTemplate.update(
+				"""
+				insert into dependencies (
+				    id, source_intervention_id, target_intervention_id,
+				    dependency_type, required, status, reason)
+				values (?, ?, ?, 'RESTORATION_DEPENDS_ON', true, 'BLOCKED',
+				        'Restoration is blocked until excavation completes')
+				""",
+				UUID.randomUUID(), lateExcavation, restoration.interventionId());
+		return new ConflictScenario(
+				restoration.interventionId(), restoration.actorId(), restoration.agencyId());
+	}
+
+	private UUID insertScenarioIntervention(
+			WorkflowFixture corridor,
+			String interventionType,
+			String plannedStart,
+			String plannedEnd) {
+		UUID agencyId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into agencies (id, code, name, agency_type) values (?, ?, ?, 'GOVERNMENT')",
+				agencyId, "AG-" + agencyId, "Conflict Agency " + agencyId);
+		UUID creatorId = createWorkflowUser(agencyId);
+		UUID caseId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into civic_cases (id, case_number, source, road_segment_id) values (?, ?, 'AGENCY', ?)",
+				caseId, "CASE-" + caseId, corridor.roadSegmentId());
+		UUID interventionId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"""
+				insert into interventions (
+				    id, intervention_number, case_id, agency_id, intervention_type,
+				    description, road_segment_id, geometry, planned_start, planned_end,
+				    status, created_by)
+				values (?, ?, ?, ?, ?, 'Phase 7 synthetic conflict scenario', ?,
+				        ST_GeomFromText('LINESTRING(80.00 16.00, 80.01 16.01)', 4326),
+				        ?::timestamptz, ?::timestamptz, 'DRAFT', ?)
+				""",
+				interventionId, "INT-" + interventionId, caseId, agencyId, interventionType,
+				corridor.roadSegmentId(), plannedStart, plannedEnd, creatorId);
+		return interventionId;
+	}
+
+	private int conflictCountFor(UUID interventionId) {
+		return jdbcTemplate.queryForObject(
+				"select count(*) from conflict_interventions where intervention_id = ?",
+				Integer.class,
+				interventionId);
 	}
 
 	private UUID createWorkflowUser(UUID agencyId) {
@@ -812,5 +998,8 @@ class CivicOsApplicationTests {
 			UUID roadSegmentId,
 			UUID agencyId,
 			UUID actorId) {
+	}
+
+	private record ConflictScenario(UUID targetId, UUID actorId, UUID actorAgencyId) {
 	}
 }

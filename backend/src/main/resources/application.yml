@@ -70,3 +70,7 @@ civicos:
   features:
     citizen-reporting-enabled: ${CITIZEN_REPORTING_ENABLED:true}
     demo-mode: ${DEMO_MODE:false}
+  conflict:
+    proximity-meters: ${CONFLICT_PROXIMITY_METERS:0}
+    repeat-digging-window-days: ${CONFLICT_REPEAT_DIGGING_WINDOW_DAYS:30}
+    multi-agency-minimum: ${CONFLICT_MULTI_AGENCY_MINIMUM:3}

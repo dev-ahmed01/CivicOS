@@ -23,4 +23,11 @@ public interface DependencyRepository extends JpaRepository<Dependency, UUID> {
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("select dependency from Dependency dependency where dependency.id = :id")
 	java.util.Optional<Dependency> findForUpdate(@Param("id") UUID id);
+
+	@Query("""
+			select distinct dependency from Dependency dependency
+			where dependency.sourceIntervention.id in :interventionIds
+			   or dependency.targetIntervention.id in :interventionIds
+			""")
+	List<Dependency> findAllConnectedTo(@Param("interventionIds") java.util.Collection<UUID> interventionIds);
 }

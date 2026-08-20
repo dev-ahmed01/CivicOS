@@ -35,4 +35,30 @@ public interface InterventionRepository extends JpaRepository<Intervention, UUID
 			@Param("geometry") Geometry geometry,
 			@Param("plannedStart") Instant plannedStart,
 			@Param("plannedEnd") Instant plannedEnd);
+
+	@Query(value = """
+			select candidate.id as id,
+			       (candidate.road_segment_id = target.road_segment_id) as "sameRoadSegment",
+			       ST_Intersects(candidate.geometry, target.geometry) as "spatialOverlap",
+			       ST_Distance(candidate.geometry::geography, target.geometry::geography) as "distanceMeters"
+			from interventions target
+			join interventions candidate on candidate.id <> target.id
+			where target.id = :targetId
+			  and candidate.status <> 'CLOSED'
+			  and candidate.planned_start < :windowEnd
+			  and candidate.planned_end > :windowStart
+			  and (
+			      candidate.road_segment_id = target.road_segment_id
+			      or ST_DWithin(
+			          candidate.geometry::geography,
+			          target.geometry::geography,
+			          :proximityMeters)
+			  )
+			order by candidate.intervention_number
+			""", nativeQuery = true)
+	List<ConflictCandidateProjection> findConflictCandidateRelations(
+			@Param("targetId") UUID targetId,
+			@Param("windowStart") Instant windowStart,
+			@Param("windowEnd") Instant windowEnd,
+			@Param("proximityMeters") double proximityMeters);
 }
