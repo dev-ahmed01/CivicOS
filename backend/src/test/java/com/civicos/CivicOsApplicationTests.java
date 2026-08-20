@@ -2,6 +2,11 @@ package com.civicos;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
 import java.util.List;
@@ -15,12 +20,16 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.context.ApplicationContext;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.repository.Repository;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -28,11 +37,14 @@ import org.testcontainers.utility.DockerImageName;
 
 import com.civicos.intervention.repository.InterventionRepository;
 import com.civicos.road.repository.RoadSegmentRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.persistence.EntityManagerFactory;
 
 @Testcontainers
 @SpringBootTest
+@AutoConfigureMockMvc
 class CivicOsApplicationTests {
 
 	private static final DockerImageName POSTGIS_IMAGE = DockerImageName
@@ -64,7 +76,8 @@ class CivicOsApplicationTests {
 			"notifications",
 			"audit_events",
 			"ai_runs",
-			"ai_recommendations");
+			"ai_recommendations",
+			"refresh_tokens");
 
 	@Container
 	static final PostgreSQLContainer<?> postgis = new PostgreSQLContainer<>(POSTGIS_IMAGE)
@@ -77,6 +90,7 @@ class CivicOsApplicationTests {
 		registry.add("spring.datasource.url", postgis::getJdbcUrl);
 		registry.add("spring.datasource.username", postgis::getUsername);
 		registry.add("spring.datasource.password", postgis::getPassword);
+		registry.add("civicos.security.jwt-secret", () -> "phase-4-test-secret-that-is-at-least-32-bytes-long");
 	}
 
 	@Autowired
@@ -93,6 +107,15 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private InterventionRepository interventionRepository;
+
+	@Autowired
+	private MockMvc mockMvc;
+
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	@Autowired
+	private PasswordEncoder passwordEncoder;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -154,8 +177,8 @@ class CivicOsApplicationTests {
 				"CivicCase", "CitizenObservation", "Intervention", "Dependency",
 				"Conflict", "CoordinationDecision", "Approval", "Sla", "Escalation",
 				"Evidence", "Inspection", "Verification", "Notification", "AuditEvent",
-				"AiRun", "AiRecommendation");
-		assertThat(applicationContext.getBeansOfType(Repository.class)).hasSize(22);
+				"AiRun", "AiRecommendation", "RefreshToken");
+		assertThat(applicationContext.getBeansOfType(Repository.class)).hasSize(23);
 	}
 
 	@Test
@@ -171,5 +194,147 @@ class CivicOsApplicationTests {
 		assertThat(roadSegmentRepository.findActiveWithinRadius(77.60, 12.90, 100)).isEmpty();
 		assertThat(interventionRepository.findSpatialTemporalCandidates(
 				null, geometry, plannedStart, plannedStart.plusSeconds(3600))).isEmpty();
+	}
+
+	@Test
+	void protectedEndpointRejectsUnauthenticatedRequestsWithCorrelationId() throws Exception {
+		mockMvc.perform(get("/api/v1/auth/me").header("X-Request-Id", "phase-4-unauthenticated"))
+				.andExpect(status().isUnauthorized())
+				.andExpect(header().string("X-Request-Id", "phase-4-unauthenticated"))
+				.andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
+				.andExpect(jsonPath("$.requestId").value("phase-4-unauthenticated"));
+	}
+
+	@Test
+	void loginRefreshAndLogoutEnforceRotatingServerControlledSessions() throws Exception {
+		TestUser citizen = createUser("CITIZEN", "ACTIVE", "OBSERVATION_CREATE");
+		JsonNode login = login(citizen);
+		String accessToken = login.get("accessToken").asText();
+		String refreshToken = login.get("refreshToken").asText();
+
+		mockMvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + accessToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.id").value(citizen.id().toString()))
+				.andExpect(jsonPath("$.roles[0]").value("CITIZEN"))
+				.andExpect(jsonPath("$.permissions[0]").value("OBSERVATION_CREATE"));
+
+		String refreshBody = objectMapper.writeValueAsString(java.util.Map.of("refreshToken", refreshToken));
+		String rotatedJson = mockMvc.perform(post("/api/v1/auth/refresh")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(refreshBody))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString();
+		JsonNode rotated = objectMapper.readTree(rotatedJson);
+		String rotatedRefreshToken = rotated.get("refreshToken").asText();
+		assertThat(rotatedRefreshToken).isNotEqualTo(refreshToken);
+
+		mockMvc.perform(post("/api/v1/auth/refresh")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(refreshBody))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.code").value("INVALID_REFRESH_TOKEN"));
+
+		mockMvc.perform(post("/api/v1/auth/logout")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(
+							java.util.Map.of("refreshToken", rotatedRefreshToken))))
+				.andExpect(status().isNoContent());
+
+		mockMvc.perform(post("/api/v1/auth/refresh")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(
+							java.util.Map.of("refreshToken", rotatedRefreshToken))))
+				.andExpect(status().isUnauthorized());
+
+		Integer securityAuditCount = jdbcTemplate.queryForObject(
+				"select count(*) from audit_events where actor_id = ? and action like 'AUTH_%'",
+				Integer.class,
+				citizen.id());
+		assertThat(securityAuditCount).isEqualTo(3);
+	}
+
+	@Test
+	void permissionsAreEnforcedAndReResolvedFromTheDatabase() throws Exception {
+		TestUser citizen = createUser("CITIZEN", "ACTIVE", "OBSERVATION_CREATE");
+		TestUser admin = createUser("ADMIN", "ACTIVE", "USER_VIEW");
+
+		String citizenAccessToken = login(citizen).get("accessToken").asText();
+		mockMvc.perform(get("/api/v1/users/{id}", admin.id())
+					.header("Authorization", "Bearer " + citizenAccessToken))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.code").value("FORBIDDEN"));
+
+		String adminAccessToken = login(admin).get("accessToken").asText();
+		mockMvc.perform(get("/api/v1/users/{id}", citizen.id())
+					.header("Authorization", "Bearer " + adminAccessToken))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.id").value(citizen.id().toString()));
+
+		jdbcTemplate.update(
+				"""
+				delete from role_permissions
+				where role_id = (select id from roles where code = 'ADMIN')
+				  and permission_id = (select id from permissions where code = 'USER_VIEW')
+				""");
+
+		mockMvc.perform(get("/api/v1/users/{id}", citizen.id())
+					.header("Authorization", "Bearer " + adminAccessToken))
+				.andExpect(status().isForbidden());
+	}
+
+	@Test
+	void disabledUsersCannotAuthenticate() throws Exception {
+		TestUser disabled = createUser("CITIZEN", "DISABLED", "OBSERVATION_CREATE");
+		mockMvc.perform(post("/api/v1/auth/login")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(java.util.Map.of(
+							"email", disabled.email(),
+							"password", disabled.password()))))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+	}
+
+	private JsonNode login(TestUser user) throws Exception {
+		String response = mockMvc.perform(post("/api/v1/auth/login")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content(objectMapper.writeValueAsString(java.util.Map.of(
+							"email", user.email(),
+							"password", user.password()))))
+				.andExpect(status().isOk())
+				.andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+				.andReturn().getResponse().getContentAsString();
+		return objectMapper.readTree(response);
+	}
+
+	private TestUser createUser(String roleCode, String status, String... permissions) {
+		UUID roleId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into roles (id, code, name, system_role) values (?, ?, ?, true) on conflict (code) do nothing",
+				roleId, roleCode, roleCode);
+		roleId = jdbcTemplate.queryForObject("select id from roles where code = ?", UUID.class, roleCode);
+
+		for (String permissionCode : permissions) {
+			UUID permissionId = UUID.randomUUID();
+			jdbcTemplate.update(
+					"insert into permissions (id, code) values (?, ?) on conflict (code) do nothing",
+					permissionId, permissionCode);
+			permissionId = jdbcTemplate.queryForObject(
+					"select id from permissions where code = ?", UUID.class, permissionCode);
+			jdbcTemplate.update(
+					"insert into role_permissions (role_id, permission_id) values (?, ?) on conflict do nothing",
+					roleId, permissionId);
+		}
+
+		UUID userId = UUID.randomUUID();
+		String email = "phase4-" + userId + "@civicos.test";
+		String password = "Phase4-Test-Password!";
+		jdbcTemplate.update(
+				"insert into users (id, full_name, email, password_hash, status) values (?, ?, ?, ?, ?)",
+				userId, "Phase 4 Test User", email, passwordEncoder.encode(password), status);
+		jdbcTemplate.update("insert into user_roles (user_id, role_id) values (?, ?)", userId, roleId);
+		return new TestUser(userId, email, password);
+	}
+
+	private record TestUser(UUID id, String email, String password) {
 	}
 }

@@ -60,6 +60,36 @@ public class AuditEvent extends AbstractUuidEntity {
 	@Column(nullable = false, updatable = false, columnDefinition = "jsonb")
 	private Map<String, Object> metadata = new LinkedHashMap<>();
 
+	protected AuditEvent() {
+	}
+
+	public static AuditEvent securityEvent(
+			User actor,
+			String action,
+			String entityType,
+			UUID entityId,
+			String requestId) {
+		AuditEvent event = new AuditEvent();
+		event.actor = actor;
+		event.action = action;
+		event.entityType = entityType;
+		event.entityId = entityId;
+		event.requestId = parseUuid(requestId);
+		event.metadata.put("category", "SECURITY");
+		if (requestId != null) {
+			event.metadata.put("correlationId", requestId);
+		}
+		return event;
+	}
+
+	private static UUID parseUuid(String value) {
+		try {
+			return value == null ? null : UUID.fromString(value);
+		} catch (IllegalArgumentException exception) {
+			return null;
+		}
+	}
+
 	public UUID getEventId() { return eventId; }
 	public User getActor() { return actor; }
 	public String getAction() { return action; }

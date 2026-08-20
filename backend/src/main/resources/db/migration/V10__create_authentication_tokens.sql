@@ -1,0 +1,20 @@
+CREATE TABLE refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uq_refresh_tokens_hash UNIQUE (token_hash),
+    CONSTRAINT ck_refresh_tokens_expiry CHECK (expires_at > created_at),
+    CONSTRAINT ck_refresh_tokens_revocation CHECK (
+        revoked_at IS NULL OR revoked_at >= created_at
+    )
+);
+
+CREATE INDEX idx_refresh_tokens_user ON refresh_tokens (user_id);
+CREATE INDEX idx_refresh_tokens_active_expiry
+    ON refresh_tokens (expires_at)
+    WHERE revoked_at IS NULL;

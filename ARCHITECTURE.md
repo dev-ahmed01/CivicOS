@@ -77,3 +77,14 @@ Evidence            = provenance-preserving proof
 - Spatial intersection, radius, and spatial-temporal candidate searches execute in PostGIS through native repository queries.
 - `AuditEventRepository` deliberately exposes append and read operations without delete operations; the database remains the final immutability guard.
 - Entity state does not expose generic status setters. Authoritative transition methods belong to the Phase 5 workflow implementation.
+
+## Phase 4 decisions
+
+- The canonical MVP role set is `CITIZEN`, `AGENCY_OFFICER`, `COORDINATOR`, `INSPECTOR`, and `ADMIN`; permissions remain explicit action-oriented records.
+- Password authentication uses BCrypt. Access tokens are HMAC-SHA256 JWTs with validated issuer, issued-at, expiry, subject, and token ID claims.
+- Refresh tokens are cryptographically random, stored only as SHA-256 hashes, rotated on use, revocable on logout, and protected against concurrent use.
+- JWTs carry identity rather than trusted role claims. Active status, roles, and effective permissions are reloaded from PostgreSQL for every authenticated request.
+- Method-level permission checks and application-level agency scope checks keep backend authorization authoritative.
+- Requests receive correlation IDs, and authentication lifecycle events are written to the append-only audit store.
+- Security errors use consistent non-leaking JSON responses. Token and password DTO string representations are redacted.
+- Workflow-state and separation-of-duties authorization remain part of Phase 5, where authoritative transition rules exist.

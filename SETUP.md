@@ -17,7 +17,7 @@ From the repository root:
 Copy-Item .env.example .env
 ```
 
-Replace the placeholder database password and JWT secret before using a shared or deployed environment. The JWT value is not consumed until authentication is implemented in Phase 4.
+Replace the placeholder database password and JWT secret before starting the backend. `JWT_SECRET` must contain at least 32 characters and must be unique per deployed environment.
 
 ## 2. Start PostgreSQL/PostGIS
 
@@ -56,7 +56,17 @@ Run locally:
 .\mvnw.cmd spring-boot:run
 ```
 
-The default backend URL is `http://localhost:8080`. Spring Security is present as required by the technology baseline; the CivicOS authentication and RBAC contract is implemented in Phase 4.
+The default backend URL is `http://localhost:8080`. CivicOS uses stateless bearer authentication with BCrypt password verification, signed access JWTs, and rotating refresh tokens stored only as SHA-256 hashes.
+
+Authentication endpoints:
+
+```text
+POST /api/v1/auth/login
+POST /api/v1/auth/refresh
+POST /api/v1/auth/logout
+GET  /api/v1/auth/me
+GET  /api/v1/users/me
+```
 
 Flyway applies the versioned migrations from `backend/src/main/resources/db/migration` when the application starts. `clean verify` also starts an isolated PostGIS Testcontainers database and verifies the schema, spatial behavior, and append-only audit protection. Docker Desktop must therefore be running for backend integration tests.
 
@@ -91,4 +101,4 @@ The core workflow must remain operational with AI disabled.
 
 ## Phase boundary
 
-Phase 1 supplies the repository, builds, Docker Compose service, and configuration contract. Phase 2 supplies PostgreSQL/PostGIS persistence configuration and Flyway migrations through `V9`. Phase 3 maps the domain entities and module-owned repositories, with Hibernate validating those mappings against Flyway. Authentication and RBAC begin in Phase 4.
+Phase 1 supplies the repository, builds, Docker Compose service, and configuration contract. Phase 2 supplies PostgreSQL/PostGIS persistence configuration and Flyway migrations. Phase 3 maps the operational domain entities and repositories. Phase 4 adds authentication, explicit database-backed RBAC, and migration `V10`. The core workflow/state machine begins in Phase 5.
