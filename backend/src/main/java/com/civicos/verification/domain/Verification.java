@@ -3,6 +3,7 @@ package com.civicos.verification.domain;
 import java.util.UUID;
 
 import com.civicos.common.persistence.AbstractCreatedEntity;
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.user.domain.User;
 
 import jakarta.persistence.Column;
@@ -40,6 +41,24 @@ public class Verification extends AbstractCreatedEntity {
 
 	@Column(columnDefinition = "text")
 	private String reason;
+
+	protected Verification() {
+	}
+
+	public static Verification fieldInspector(
+			UUID interventionId,
+			Result result,
+			User inspector,
+			String reason) {
+		Verification verification = new Verification();
+		verification.targetType = "INTERVENTION";
+		verification.targetId = ValidationRules.required(interventionId, "Intervention");
+		verification.source = Source.FIELD_INSPECTOR;
+		verification.result = ValidationRules.required(result, "Verification result");
+		verification.submittedBy = ValidationRules.required(inspector, "Inspector");
+		verification.reason = reason == null || reason.isBlank() ? null : reason.strip();
+		return verification;
+	}
 
 	public String getTargetType() { return targetType; }
 	public UUID getTargetId() { return targetId; }

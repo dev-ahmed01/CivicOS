@@ -68,7 +68,7 @@ public class ApprovalPolicy {
 				"INTERVENTION", intervention.getId());
 		for (String requiredType : properties.getRequiredEvidenceTypes()) {
 			boolean accepted = evidence.stream().anyMatch(item ->
-					item.getType().equalsIgnoreCase(requiredType)
+					item.getType().name().equalsIgnoreCase(requiredType)
 							&& item.getStatus() == Evidence.Status.ACCEPTED);
 			if (!accepted) {
 				throw new DomainConflictException(

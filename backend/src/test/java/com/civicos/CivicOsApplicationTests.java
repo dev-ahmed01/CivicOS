@@ -10,7 +10,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.time.Instant;
 import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -54,6 +56,14 @@ import com.civicos.conflict.domain.Conflict;
 import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
 import com.civicos.dependency.domain.Dependency;
+import com.civicos.evidence.application.EvidenceReviewCommand;
+import com.civicos.evidence.application.EvidenceService;
+import com.civicos.evidence.application.EvidenceUploadCommand;
+import com.civicos.evidence.domain.Evidence;
+import com.civicos.evidence.storage.FileStorageService;
+import com.civicos.inspection.application.CompleteInspectionCommand;
+import com.civicos.inspection.application.InspectionService;
+import com.civicos.inspection.domain.Inspection;
 import com.civicos.intervention.application.CreateInterventionCommand;
 import com.civicos.intervention.application.InterventionManagementService;
 import com.civicos.intervention.application.UpdateDraftInterventionCommand;
@@ -75,6 +85,9 @@ import com.civicos.workflow.application.SeparationOfDutiesException;
 import com.civicos.workflow.application.StaleWorkflowVersionException;
 import com.civicos.workflow.application.WorkflowTransitionResult;
 import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
+import com.civicos.verification.application.VerificationCommand;
+import com.civicos.verification.application.VerificationService;
+import com.civicos.verification.domain.Verification;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -88,6 +101,8 @@ class CivicOsApplicationTests {
 	private static final DockerImageName POSTGIS_IMAGE = DockerImageName
 			.parse("postgis/postgis:17-3.5")
 			.asCompatibleSubstituteFor("postgres");
+	private static final Path EVIDENCE_STORAGE_PATH = Path.of(
+			System.getProperty("java.io.tmpdir"), "civicos-phase-9-" + UUID.randomUUID());
 
 	private static final List<String> REQUIRED_TABLES = List.of(
 			"users",
@@ -130,6 +145,7 @@ class CivicOsApplicationTests {
 		registry.add("spring.datasource.password", postgis::getPassword);
 		registry.add("civicos.security.jwt-secret", () -> "phase-4-test-secret-that-is-at-least-32-bytes-long");
 		registry.add("civicos.sla.monitor-enabled", () -> "false");
+		registry.add("civicos.file-storage.path", () -> EVIDENCE_STORAGE_PATH.toString());
 	}
 
 	@Autowired
@@ -179,6 +195,18 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private SlaService slaService;
+
+	@Autowired
+	private EvidenceService evidenceService;
+
+	@Autowired
+	private FileStorageService fileStorageService;
+
+	@Autowired
+	private InspectionService inspectionService;
+
+	@Autowired
+	private VerificationService verificationService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -965,6 +993,210 @@ class CivicOsApplicationTests {
 		} finally {
 			SecurityContextHolder.clearContext();
 		}
+	}
+
+	@Test
+	void evidenceUploadValidatesContentPreservesProvenanceAndRequiresIndependentReview() throws Exception {
+		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		byte[] png = pngEvidence();
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "EVIDENCE_UPLOAD");
+		try {
+			assertThatThrownBy(() -> evidenceService.upload(
+					new EvidenceUploadCommand(
+							"INTERVENTION", fixture.interventionId(), Evidence.Type.COMPLETION,
+							"spoofed.png", "image/png", Instant.parse("2026-08-19T08:00:00Z"),
+							null, null, Map.of()),
+					"not-a-png".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+					"phase-9-invalid-signature"))
+					.isInstanceOf(DomainValidationException.class)
+					.hasMessageContaining("declared MIME type");
+
+			var uploaded = evidenceService.upload(
+					new EvidenceUploadCommand(
+							"intervention", fixture.interventionId(), Evidence.Type.COMPLETION,
+							"../../completion.png", "image/png",
+							Instant.parse("2026-08-19T08:00:00Z"),
+							new BigDecimal("12.971599"), new BigDecimal("77.594566"),
+							Map.of("caption", "Restoration completion")),
+					png,
+					"phase-9-evidence-upload");
+
+			assertThat(uploaded.status()).isEqualTo(Evidence.Status.UPLOADED);
+			assertThat(uploaded.checksum()).hasSize(64);
+			assertThat(fileStorageService.open(uploaded.fileReference()).readAllBytes()).isEqualTo(png);
+			assertThat(jdbcTemplate.queryForObject(
+					"select original_filename from evidence where id = ?",
+					String.class,
+					uploaded.evidenceId())).isEqualTo("completion.png");
+			assertThat(jdbcTemplate.queryForObject(
+					"select metadata ->> 'provenance' from evidence where id = ?",
+					String.class,
+					uploaded.evidenceId())).isEqualTo("AGENCY_SUBMITTED");
+
+			var underReview = evidenceService.submitForReview(
+					uploaded.evidenceId(), 0, "Ready for independent review",
+					"phase-9-evidence-submit");
+			assertThat(underReview.status()).isEqualTo(Evidence.Status.UNDER_REVIEW);
+
+			UUID reviewerId = createWorkflowUser(fixture.agencyId());
+			authenticateWorkflowActor(
+					reviewerId, fixture.agencyId(), "INSPECTOR", "EVIDENCE_ACCEPT");
+			var accepted = evidenceService.review(
+					uploaded.evidenceId(),
+					new EvidenceReviewCommand(Evidence.Status.ACCEPTED, "Evidence is valid", 1),
+					"phase-9-evidence-review");
+			assertThat(accepted.status()).isEqualTo(Evidence.Status.ACCEPTED);
+			assertThat(accepted.version()).isEqualTo(2);
+			assertThat(auditCount(uploaded.evidenceId())).isEqualTo(3);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void inspectionsAreAssignedVersionedAndImmutableAfterCompletion() {
+		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
+		try {
+			var scheduled = inspectionService.schedule(
+					fixture.interventionId(), "Final field inspection", "phase-9-inspection-schedule");
+			var started = inspectionService.start(
+					scheduled.inspectionId(), 0, "phase-9-inspection-start");
+			assertThat(started.status()).isEqualTo(Inspection.Status.IN_PROGRESS);
+
+			authenticateWorkflowActor(
+					fixture.actorId(), fixture.agencyId(), "INSPECTOR", "INSPECTION_COMPLETE");
+			var completed = inspectionService.complete(
+					scheduled.inspectionId(),
+					new CompleteInspectionCommand(Inspection.Result.PASSED, "Site is compliant", 1),
+					"phase-9-inspection-complete");
+			assertThat(completed.status()).isEqualTo(Inspection.Status.COMPLETED);
+			assertThat(completed.version()).isEqualTo(2);
+			assertThatThrownBy(() -> inspectionService.complete(
+					scheduled.inspectionId(),
+					new CompleteInspectionCommand(Inspection.Result.FAILED, "Mutation attempt", 2),
+					"phase-9-inspection-mutate"))
+					.isInstanceOf(DomainConflictException.class);
+			assertThatThrownBy(() -> jdbcTemplate.update(
+					"update inspections set notes = 'tampered' where id = ?",
+					scheduled.inspectionId()))
+					.isInstanceOf(DataAccessException.class)
+					.hasMessageContaining("completed inspections are immutable");
+			assertThat(auditCount(scheduled.inspectionId())).isEqualTo(3);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		WorkflowFixture selfInspection = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", true);
+		authenticateWorkflowActor(
+				selfInspection.actorId(), selfInspection.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
+		try {
+			assertThatThrownBy(() -> inspectionService.schedule(
+					selfInspection.interventionId(), "Self inspection", "phase-9-self-inspection"))
+					.isInstanceOf(SeparationOfDutiesException.class);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void authoritativeVerificationRequiresAcceptedEvidenceAndTransitionsWorkflowAtomically() {
+		WorkflowFixture fixture = createWorkflowFixture("COMPLETED_PENDING_VERIFICATION", false);
+		UUID inspectorId = createWorkflowUser(fixture.agencyId());
+		authenticateWorkflowActor(
+				inspectorId, fixture.agencyId(), "INSPECTOR", "INSPECTION_CREATE");
+		var scheduled = inspectionService.schedule(
+				fixture.interventionId(), "Final verification inspection", "phase-9-final-schedule");
+		inspectionService.start(scheduled.inspectionId(), 0, "phase-9-final-start");
+		authenticateWorkflowActor(
+				inspectorId, fixture.agencyId(), "INSPECTOR", "INSPECTION_COMPLETE");
+		inspectionService.complete(
+				scheduled.inspectionId(),
+				new CompleteInspectionCommand(Inspection.Result.PASSED, "All checks passed", 1),
+				"phase-9-final-complete");
+
+		authenticateWorkflowActor(
+				inspectorId, fixture.agencyId(), "INSPECTOR", "VERIFICATION_PASS");
+		try {
+			assertThatThrownBy(() -> verificationService.verify(
+					fixture.interventionId(),
+					new VerificationCommand(
+							scheduled.inspectionId(), Verification.Result.PASSED,
+							"Official verification passed", 0),
+					"phase-9-missing-evidence"))
+					.isInstanceOf(DomainConflictException.class)
+					.hasMessageContaining("Required accepted evidence");
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from verifications where target_id = ?",
+					Integer.class,
+					fixture.interventionId())).isZero();
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		UUID reviewerId = createWorkflowUser(fixture.agencyId());
+		uploadAndAcceptEvidence(fixture, fixture.actorId(), reviewerId, Evidence.Type.COMPLETION);
+		uploadAndAcceptEvidence(fixture, fixture.actorId(), reviewerId, Evidence.Type.RESTORATION);
+
+		authenticateWorkflowActor(
+				inspectorId, fixture.agencyId(), "INSPECTOR", "VERIFICATION_PASS");
+		try {
+			var verified = verificationService.verify(
+					fixture.interventionId(),
+					new VerificationCommand(
+							scheduled.inspectionId(), Verification.Result.PASSED,
+							"Official verification passed", 0),
+					"phase-9-verification-pass");
+			assertThat(verified.interventionStatus()).isEqualTo("VERIFIED");
+			assertThat(verified.interventionVersion()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					fixture.interventionId())).isEqualTo("VERIFIED");
+			assertThatThrownBy(() -> jdbcTemplate.update(
+					"update verifications set reason = 'tampered' where id = ?",
+					verified.verificationId()))
+					.isInstanceOf(DataAccessException.class)
+					.hasMessageContaining("verifications are append-only");
+			assertThat(auditCount(verified.verificationId())).isEqualTo(1);
+			assertThat(auditCount(fixture.interventionId())).isEqualTo(1);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	private void uploadAndAcceptEvidence(
+			WorkflowFixture fixture,
+			UUID uploaderId,
+			UUID reviewerId,
+			Evidence.Type type) {
+		authenticateWorkflowActor(
+				uploaderId, fixture.agencyId(), "AGENCY_OFFICER", "EVIDENCE_UPLOAD");
+		var uploaded = evidenceService.upload(
+				new EvidenceUploadCommand(
+						"INTERVENTION", fixture.interventionId(), type,
+						type.name().toLowerCase() + ".png", "image/png",
+						Instant.parse("2026-08-19T08:00:00Z"), null, null, Map.of()),
+				pngEvidence(),
+				"phase-9-" + type.name().toLowerCase() + "-upload");
+		evidenceService.submitForReview(
+				uploaded.evidenceId(), 0, "Required evidence ready",
+				"phase-9-" + type.name().toLowerCase() + "-submit");
+		authenticateWorkflowActor(
+				reviewerId, fixture.agencyId(), "INSPECTOR", "EVIDENCE_ACCEPT");
+		evidenceService.review(
+				uploaded.evidenceId(),
+				new EvidenceReviewCommand(Evidence.Status.ACCEPTED, "Required evidence accepted", 1),
+				"phase-9-" + type.name().toLowerCase() + "-accept");
+	}
+
+	private byte[] pngEvidence() {
+		return new byte[] {
+				(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+				0x00, 0x00, 0x00, 0x00
+		};
 	}
 
 	private JsonNode login(TestUser user) throws Exception {

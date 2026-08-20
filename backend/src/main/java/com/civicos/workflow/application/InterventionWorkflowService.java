@@ -192,10 +192,14 @@ public class InterventionWorkflowService {
 	}
 
 	private void assertVerification(UUID interventionId, UUID actorId, List<Verification.Result> results) {
-		if (!verificationRepository.existsByTargetTypeAndTargetIdAndSubmittedByIdAndResultIn(
-				"INTERVENTION", interventionId, actorId, results)) {
+		Verification latest = verificationRepository
+				.findFirstByTargetTypeAndTargetIdOrderByCreatedAtDesc("INTERVENTION", interventionId)
+				.orElse(null);
+		if (latest == null || latest.getSubmittedBy() == null
+				|| !latest.getSubmittedBy().getId().equals(actorId)
+				|| !results.contains(latest.getResult())) {
 			throw new WorkflowPreconditionException(
-					"A matching authoritative verification by the current actor is required.");
+					"The latest authoritative verification must match the current actor and action.");
 		}
 	}
 

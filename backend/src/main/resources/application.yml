@@ -65,6 +65,7 @@ civicos:
   file-storage:
     path: ${FILE_STORAGE_PATH:./data/uploads}
     max-upload-size: ${MAX_UPLOAD_SIZE:20MB}
+    allowed-content-types: ${ALLOWED_EVIDENCE_CONTENT_TYPES:image/jpeg,image/png,image/webp,application/pdf,video/mp4}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   features:
@@ -76,6 +77,8 @@ civicos:
     multi-agency-minimum: ${CONFLICT_MULTI_AGENCY_MINIMUM:3}
   approval:
     required-evidence-types: ${APPROVAL_REQUIRED_EVIDENCE_TYPES:}
+  verification:
+    required-evidence-types: ${VERIFICATION_REQUIRED_EVIDENCE_TYPES:COMPLETION,RESTORATION}
   sla:
     business-zone: ${SLA_BUSINESS_ZONE:Asia/Kolkata}
     business-day-start: ${SLA_BUSINESS_DAY_START:09:00}
