@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["result", "confidence", "warnings", "assumptions", "sourceReferences"],
+  "properties": {
+    "result": {
+      "type": "object",
+      "required": ["category", "subCategory", "severity", "reasoningSummary"]
+    },
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "warnings": {"type": "array"},
+    "assumptions": {"type": "array"},
+    "sourceReferences": {"type": "array"}
+  },
+  "additionalProperties": false
+}

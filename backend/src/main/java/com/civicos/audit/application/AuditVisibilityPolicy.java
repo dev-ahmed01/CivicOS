@@ -5,6 +5,8 @@ import java.util.UUID;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Component;
 
+import com.civicos.ai.repository.AiRecommendationRepository;
+import com.civicos.ai.repository.AiRunRepository;
 import com.civicos.approval.repository.ApprovalRepository;
 import com.civicos.audit.domain.AuditEvent;
 import com.civicos.auth.application.AuthorizationService;
@@ -35,6 +37,8 @@ public class AuditVisibilityPolicy {
 	private final SlaRepository slaRepository;
 	private final EscalationRepository escalationRepository;
 	private final CitizenObservationRepository observationRepository;
+	private final AiRunRepository aiRunRepository;
+	private final AiRecommendationRepository aiRecommendationRepository;
 
 	public AuditVisibilityPolicy(
 			AuthorizationService authorizationService,
@@ -47,7 +51,9 @@ public class AuditVisibilityPolicy {
 			VerificationRepository verificationRepository,
 			SlaRepository slaRepository,
 			EscalationRepository escalationRepository,
-			CitizenObservationRepository observationRepository) {
+			CitizenObservationRepository observationRepository,
+			AiRunRepository aiRunRepository,
+			AiRecommendationRepository aiRecommendationRepository) {
 		this.authorizationService = authorizationService;
 		this.interventionRepository = interventionRepository;
 		this.approvalRepository = approvalRepository;
@@ -59,6 +65,8 @@ public class AuditVisibilityPolicy {
 		this.slaRepository = slaRepository;
 		this.escalationRepository = escalationRepository;
 		this.observationRepository = observationRepository;
+		this.aiRunRepository = aiRunRepository;
+		this.aiRecommendationRepository = aiRecommendationRepository;
 	}
 
 	public void assertVisible(AuditEvent event, CivicPrincipal principal) {
@@ -103,6 +111,14 @@ public class AuditVisibilityPolicy {
 							escalation.getSla().getTargetType(), escalation.getSla().getTargetId(), principal))
 					.orElse(false);
 			case "CIVIC_CASE" -> canViewCase(entityId, principal);
+			case "AI_RUN" -> aiRunRepository.findById(entityId)
+					.map(run -> run.getRequestedBy().getId().equals(principal.userId())
+							|| canViewTarget(run.getEntityType(), run.getEntityId(), principal))
+					.orElse(false);
+			case "AI_RECOMMENDATION" -> aiRecommendationRepository.findById(entityId)
+					.map(recommendation -> recommendation.getConflict().getInterventions().stream()
+							.anyMatch(intervention -> canView(intervention, principal)))
+					.orElse(false);
 			case "ROAD", "ROAD_SEGMENT" -> principal.roles().contains(SystemRole.COORDINATOR.name());
 			default -> false;
 		};
@@ -116,6 +132,10 @@ public class AuditVisibilityPolicy {
 					.map(observation -> observation.getSubmittedBy().getId().equals(principal.userId()))
 					.orElse(false);
 			case "CIVIC_CASE" -> canViewCase(targetId, principal);
+			case "CONFLICT" -> conflictRepository.findById(targetId)
+					.map(conflict -> conflict.getInterventions().stream()
+							.anyMatch(intervention -> canView(intervention, principal)))
+					.orElse(false);
 			default -> false;
 		};
 	}

@@ -29,4 +29,24 @@ public interface ConflictRepository extends JpaRepository<Conflict, UUID> {
 			@Param("interventionId") UUID interventionId,
 			@Param("severity") Conflict.Severity severity,
 			@Param("statuses") List<Conflict.Status> statuses);
+
+	@Query("""
+			select (count(c) > 0)
+			from Conflict c join c.interventions i
+			where c.id = :conflictId and i.agency.id = :agencyId
+			""")
+	boolean existsByIdAndInterventionAgencyId(
+			@Param("conflictId") UUID conflictId,
+			@Param("agencyId") UUID agencyId);
+
+	@Query("""
+			select (count(c) > 0)
+			from Conflict c join c.interventions i, Inspection inspection
+			where c.id = :conflictId
+			  and inspection.intervention.id = i.id
+			  and inspection.inspector.id = :inspectorId
+			""")
+	boolean existsByIdAndAssignedInspectorId(
+			@Param("conflictId") UUID conflictId,
+			@Param("inspectorId") UUID inspectorId);
 }

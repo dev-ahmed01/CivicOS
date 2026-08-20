@@ -59,9 +59,25 @@ civicos:
   ai:
     enabled: ${AI_ENABLED:false}
     provider: ${AI_PROVIDER:mock}
+    fallback-provider: ${AI_FALLBACK_PROVIDER:}
     model: ${AI_MODEL:}
-    api-key: ${AI_API_KEY:}
-    timeout-seconds: ${AI_TIMEOUT_SECONDS:20}
+    timeout: ${AI_TIMEOUT_SECONDS:20}s
+    max-attempts: ${AI_MAX_ATTEMPTS:2}
+    retry-delay: ${AI_RETRY_DELAY_MS:100}ms
+    human-review-threshold: ${AI_HUMAN_REVIEW_THRESHOLD:0.70}
+    tasks:
+      classification:
+        model: ${AI_CLASSIFICATION_MODEL:}
+      matching-assistance:
+        model: ${AI_MATCHING_MODEL:}
+      evidence-analysis:
+        model: ${AI_VISION_MODEL:}
+      conflict-explanation:
+        model: ${AI_CONFLICT_MODEL:}
+      recommendation-generation:
+        model: ${AI_RECOMMENDATION_MODEL:}
+      case-summarization:
+        model: ${AI_SUMMARY_MODEL:}
   file-storage:
     path: ${FILE_STORAGE_PATH:./data/uploads}
     max-upload-size: ${MAX_UPLOAD_SIZE:20MB}
