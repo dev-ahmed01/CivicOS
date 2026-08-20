@@ -100,3 +100,16 @@ Evidence            = provenance-preserving proof
 - The entity update and immutable audit event are committed atomically. Audit state records the action, before/after status and version, actor, reason, and correlation ID.
 - Stable workflow error codes distinguish invalid state, failed preconditions, concurrent modification, and separation-of-duties denial.
 - Phase 5 exposes application services for later command APIs; the REST/OpenAPI surface remains in its master-specified phase.
+
+## Phase 6 decisions
+
+- Road and road-segment commands validate non-empty EPSG:4326 geometry and persist authoritative spatial data through PostGIS.
+- Road-segment identity is immutable. Geometry changes require the separate `ROAD_GEOMETRY_UPDATE` permission, and inactive or operationally referenced records cannot be silently removed.
+- Intervention creation is agency-scoped and starts in `DRAFT`. The civic case, owning agency, active road segment, planned interval, and PostGIS intersection are validated atomically.
+- Direct intervention edits are restricted to `DRAFT`; submitted work must use the workflow and later material-change/re-analysis path.
+- Required dependencies use the canonical `source → target` direction. Invalid current schedules create a visible `BLOCKED` dependency rather than hiding the planning relationship.
+- Required dependency cycles are rejected under a PostgreSQL transaction-level advisory lock, preventing concurrent inverse edges from bypassing cycle detection.
+- Dependencies are cancelled with a reason and audit event instead of being deleted.
+- Migration `V11` adds optimistic versions to roads, road segments, and dependencies. Intervention optimistic locking already existed.
+- Phase 6 mutations use explicit permissions, roles, agency scope, stable validation/conflict errors, and atomic immutable audit records.
+- Conflict record generation remains Phase 7; Phase 6 only supplies the validated spatial, temporal, and dependency inputs.

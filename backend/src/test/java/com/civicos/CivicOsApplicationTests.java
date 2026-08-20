@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -16,6 +17,7 @@ import java.util.UUID;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.MultiLineString;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,7 +42,20 @@ import org.testcontainers.utility.DockerImageName;
 import com.civicos.intervention.repository.InterventionRepository;
 import com.civicos.auth.security.CivicPrincipal;
 import com.civicos.casefile.domain.CivicCase;
+import com.civicos.common.domain.DomainConflictException;
+import com.civicos.dependency.application.CreateDependencyCommand;
+import com.civicos.dependency.application.DependencyManagementService;
+import com.civicos.dependency.domain.Dependency;
+import com.civicos.intervention.application.CreateInterventionCommand;
+import com.civicos.intervention.application.InterventionManagementService;
+import com.civicos.intervention.application.UpdateDraftInterventionCommand;
 import com.civicos.intervention.domain.Intervention;
+import com.civicos.road.application.CreateRoadCommand;
+import com.civicos.road.application.CreateRoadSegmentCommand;
+import com.civicos.road.application.RoadManagementService;
+import com.civicos.road.application.UpdateRoadCommand;
+import com.civicos.road.domain.Road;
+import com.civicos.road.domain.RoadSegment;
 import com.civicos.road.repository.RoadSegmentRepository;
 import com.civicos.workflow.application.CaseWorkflowService;
 import com.civicos.workflow.application.InterventionWorkflowService;
@@ -133,6 +148,15 @@ class CivicOsApplicationTests {
 
 	@Autowired
 	private CaseWorkflowService caseWorkflowService;
+
+	@Autowired
+	private RoadManagementService roadManagementService;
+
+	@Autowired
+	private InterventionManagementService interventionManagementService;
+
+	@Autowired
+	private DependencyManagementService dependencyManagementService;
 
 	@Test
 	void contextLoadsWithFlywayManagedSchema() {
@@ -464,6 +488,185 @@ class CivicOsApplicationTests {
 		}
 	}
 
+	@Test
+	void roadAndSegmentCommandsPersistValidPostgisGeometryAndAuditEvents() {
+		WorkflowFixture actorFixture = createWorkflowFixture("DRAFT", false);
+		GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
+		LineString segmentGeometry = geometryFactory.createLineString(new Coordinate[] {
+				new Coordinate(79.00, 14.00),
+				new Coordinate(79.01, 14.01)
+		});
+		MultiLineString roadGeometry = geometryFactory.createMultiLineString(
+				new LineString[] {(LineString) segmentGeometry.copy()});
+		roadGeometry.setSRID(4326);
+
+		authenticateWorkflowActor(
+				actorFixture.actorId(), actorFixture.agencyId(), "ADMIN", "ROAD_CREATE");
+		try {
+			var roadResult = roadManagementService.createRoad(
+					new CreateRoadCommand(
+							"ROAD-PHASE-6-" + UUID.randomUUID(),
+							"Phase 6 Road",
+							Road.Classification.LOCAL,
+							roadGeometry),
+					"Authoritative road import",
+					"phase-6-road-create");
+			var segmentResult = roadManagementService.createRoadSegment(
+					new CreateRoadSegmentCommand(
+							roadResult.entityId(),
+							"SEG-PHASE-6-" + UUID.randomUUID(),
+							"Phase 6 Segment",
+							RoadSegment.Classification.LOCAL,
+							RoadSegment.SurfaceType.BITUMINOUS,
+							new BigDecimal("150.00"),
+							segmentGeometry),
+					"Operational segment creation",
+					"phase-6-segment-create");
+			authenticateWorkflowActor(
+					actorFixture.actorId(), actorFixture.agencyId(), "ADMIN", "ROAD_UPDATE");
+			var updatedRoad = roadManagementService.updateRoad(
+					roadResult.entityId(),
+					new UpdateRoadCommand(
+							"Phase 6 Road Updated", Road.Classification.LOCAL, roadGeometry, 0),
+					"Corrected authoritative road name",
+					"phase-6-road-update");
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select ST_IsValid(geometry) from road_segments where id = ?",
+					Boolean.class,
+					segmentResult.entityId())).isTrue();
+			assertThat(updatedRoad.version()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from audit_events where entity_id in (?, ?)",
+					Integer.class,
+					roadResult.entityId(), segmentResult.entityId())).isEqualTo(3);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void interventionCreationRequiresAgencyScopeCaseSegmentAndSpatialIntersection() {
+		WorkflowFixture fixture = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_CREATE");
+		try {
+			GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
+			LineString validGeometry = geometryFactory.createLineString(new Coordinate[] {
+					new Coordinate(78.00, 13.50),
+					new Coordinate(78.01, 13.51)
+			});
+			var result = interventionManagementService.create(
+					new CreateInterventionCommand(
+							"INT-PHASE-6-" + UUID.randomUUID(),
+							fixture.caseId(),
+							fixture.agencyId(),
+							Intervention.Type.UTILITY_EXCAVATION,
+							"Validated utility excavation",
+							fixture.roadSegmentId(),
+							validGeometry,
+							Instant.parse("2026-09-01T08:00:00Z"),
+							Instant.parse("2026-09-02T08:00:00Z"),
+							Intervention.Priority.HIGH),
+					"Agency work plan",
+					"phase-6-intervention-create");
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from interventions where id = ?",
+					String.class,
+					result.entityId())).isEqualTo("DRAFT");
+			assertThat(auditCount(result.entityId())).isEqualTo(1);
+			authenticateWorkflowActor(
+					fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_UPDATE");
+			var updated = interventionManagementService.updateDraft(
+					result.entityId(),
+					new UpdateDraftInterventionCommand(
+							fixture.caseId(), fixture.agencyId(), Intervention.Type.UTILITY_EXCAVATION,
+							"Validated utility excavation with updated schedule",
+							fixture.roadSegmentId(), validGeometry,
+							Instant.parse("2026-09-03T08:00:00Z"),
+							Instant.parse("2026-09-04T08:00:00Z"),
+							Intervention.Priority.HIGH, 0),
+					"Agency schedule correction",
+					"phase-6-intervention-update");
+			assertThat(updated.version()).isEqualTo(1);
+			assertThat(auditCount(result.entityId())).isEqualTo(2);
+
+			LineString outsideSegment = geometryFactory.createLineString(new Coordinate[] {
+					new Coordinate(81.00, 18.00),
+					new Coordinate(81.01, 18.01)
+			});
+			authenticateWorkflowActor(
+					fixture.actorId(), fixture.agencyId(), "AGENCY_OFFICER", "INTERVENTION_CREATE");
+			assertThatThrownBy(() -> interventionManagementService.create(
+					new CreateInterventionCommand(
+							"INT-PHASE-6-OUTSIDE-" + UUID.randomUUID(),
+							fixture.caseId(), fixture.agencyId(), Intervention.Type.ROADWORK,
+							"Outside segment", fixture.roadSegmentId(), outsideSegment,
+							Instant.parse("2026-09-01T08:00:00Z"),
+							Instant.parse("2026-09-02T08:00:00Z"),
+							Intervention.Priority.NORMAL),
+					null,
+					"phase-6-invalid-geometry"))
+					.isInstanceOf(DomainConflictException.class)
+					.hasMessageContaining("intersect");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void requiredDependenciesAreBlockedByInvalidSchedulesAndRejectCycles() {
+		WorkflowFixture first = createWorkflowFixture("DRAFT", false);
+		WorkflowFixture second = createWorkflowFixture("DRAFT", false);
+		WorkflowFixture third = createWorkflowFixture("DRAFT", false);
+		authenticateWorkflowActor(
+				first.actorId(), first.agencyId(), "COORDINATOR", "COORDINATION_UPDATE");
+		try {
+			var firstDependency = dependencyManagementService.create(
+					new CreateDependencyCommand(
+							first.interventionId(), second.interventionId(),
+							Dependency.Type.MUST_COMPLETE_BEFORE, true,
+							"First intervention must complete before second"),
+					"phase-6-dependency-one");
+			dependencyManagementService.create(
+					new CreateDependencyCommand(
+							second.interventionId(), third.interventionId(),
+							Dependency.Type.MUST_VERIFY_BEFORE, true,
+							"Second intervention must be verified before third"),
+					"phase-6-dependency-two");
+
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from dependencies where id = ?",
+					String.class,
+					firstDependency.entityId())).isEqualTo("BLOCKED");
+			assertThatThrownBy(() -> dependencyManagementService.create(
+					new CreateDependencyCommand(
+							third.interventionId(), first.interventionId(),
+							Dependency.Type.RESTORATION_DEPENDS_ON, true,
+							"This edge would close the cycle"),
+					"phase-6-dependency-cycle"))
+					.isInstanceOf(DomainConflictException.class)
+					.hasMessageContaining("cycle");
+			assertThat(jdbcTemplate.queryForObject(
+					"select count(*) from dependencies where required = true",
+					Integer.class)).isEqualTo(2);
+			var cancelled = dependencyManagementService.cancel(
+					firstDependency.entityId(),
+					0,
+					"Coordination plan superseded",
+					"phase-6-dependency-cancel");
+			assertThat(cancelled.version()).isEqualTo(1);
+			assertThat(jdbcTemplate.queryForObject(
+					"select status from dependencies where id = ?",
+					String.class,
+					firstDependency.entityId())).isEqualTo("CANCELLED");
+			assertThat(auditCount(firstDependency.entityId())).isEqualTo(2);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
 	private JsonNode login(TestUser user) throws Exception {
 		String response = mockMvc.perform(post("/api/v1/auth/login")
 					.contentType(MediaType.APPLICATION_JSON)
@@ -550,7 +753,7 @@ class CivicOsApplicationTests {
 				""",
 				interventionId, "INT-" + interventionId, caseId, agencyId,
 				roadSegmentId, status, creatorId);
-		return new WorkflowFixture(interventionId, caseId, agencyId, actorId);
+		return new WorkflowFixture(interventionId, caseId, roadSegmentId, agencyId, actorId);
 	}
 
 	private UUID createWorkflowUser(UUID agencyId) {
@@ -603,6 +806,11 @@ class CivicOsApplicationTests {
 	private record TestUser(UUID id, String email, String password) {
 	}
 
-	private record WorkflowFixture(UUID interventionId, UUID caseId, UUID agencyId, UUID actorId) {
+	private record WorkflowFixture(
+			UUID interventionId,
+			UUID caseId,
+			UUID roadSegmentId,
+			UUID agencyId,
+			UUID actorId) {
 	}
 }

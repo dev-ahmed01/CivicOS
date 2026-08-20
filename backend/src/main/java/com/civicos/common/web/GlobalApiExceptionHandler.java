@@ -15,8 +15,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.civicos.auth.application.InvalidRefreshTokenException;
+import com.civicos.common.domain.DomainConflictException;
+import com.civicos.common.domain.DomainValidationException;
+import com.civicos.common.domain.StaleEntityVersionException;
 import com.civicos.workflow.application.SeparationOfDutiesException;
-import com.civicos.workflow.application.StaleWorkflowVersionException;
 import com.civicos.workflow.application.WorkflowPreconditionException;
 import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
@@ -63,7 +65,21 @@ public class GlobalApiExceptionHandler {
 		return error(HttpStatus.CONFLICT, "WORKFLOW_PRECONDITION_FAILED", exception.getMessage(), request);
 	}
 
-	@ExceptionHandler({StaleWorkflowVersionException.class, OptimisticLockingFailureException.class})
+	@ExceptionHandler(DomainValidationException.class)
+	ResponseEntity<ApiError> domainValidation(
+			DomainValidationException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.BAD_REQUEST, "DOMAIN_VALIDATION_FAILED", exception.getMessage(), request);
+	}
+
+	@ExceptionHandler(DomainConflictException.class)
+	ResponseEntity<ApiError> domainConflict(
+			DomainConflictException exception,
+			HttpServletRequest request) {
+		return error(HttpStatus.CONFLICT, "DOMAIN_CONFLICT", exception.getMessage(), request);
+	}
+
+	@ExceptionHandler({StaleEntityVersionException.class, OptimisticLockingFailureException.class})
 	ResponseEntity<ApiError> concurrentModification(Exception exception, HttpServletRequest request) {
 		return error(HttpStatus.CONFLICT, "CONCURRENT_MODIFICATION",
 				"The resource was modified by another request.", request);

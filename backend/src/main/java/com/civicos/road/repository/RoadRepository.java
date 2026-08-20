@@ -10,5 +10,6 @@ import com.civicos.road.domain.Road;
 
 public interface RoadRepository extends JpaRepository<Road, UUID> {
 	Optional<Road> findByExternalReference(String externalReference);
+	boolean existsByExternalReference(String externalReference);
 	List<Road> findByActiveTrueOrderByNameAsc();
 }

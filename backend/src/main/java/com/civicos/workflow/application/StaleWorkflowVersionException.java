@@ -1,9 +1,8 @@
 package com.civicos.workflow.application;
 
-public class StaleWorkflowVersionException extends RuntimeException {
+public class StaleWorkflowVersionException extends com.civicos.common.domain.StaleEntityVersionException {
 
 	public StaleWorkflowVersionException(String entityType, long expectedVersion, long actualVersion) {
-		super("%s was modified concurrently (expected version %d, actual version %d)."
-				.formatted(entityType, expectedVersion, actualVersion));
+		super(entityType, expectedVersion, actualVersion);
 	}
 }

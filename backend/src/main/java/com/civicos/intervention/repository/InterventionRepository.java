@@ -15,8 +15,10 @@ import com.civicos.intervention.domain.Intervention;
 public interface InterventionRepository extends JpaRepository<Intervention, UUID> {
 
 	Optional<Intervention> findByInterventionNumber(String interventionNumber);
+	boolean existsByInterventionNumber(String interventionNumber);
 
 	List<Intervention> findByRoadSegmentIdAndStatusIn(UUID roadSegmentId, List<Intervention.Status> statuses);
+	boolean existsByRoadSegmentIdAndStatusNot(UUID roadSegmentId, Intervention.Status status);
 
 	@Query(value = """
 			select i.*

@@ -7,6 +7,10 @@ import org.locationtech.jts.geom.Geometry;
 import com.civicos.agency.domain.Agency;
 import com.civicos.casefile.domain.CivicCase;
 import com.civicos.common.persistence.AbstractAuditableEntity;
+import com.civicos.common.domain.DomainConflictException;
+import com.civicos.common.domain.DomainValidationException;
+import com.civicos.common.validation.GeometryRules;
+import com.civicos.common.validation.ValidationRules;
 import com.civicos.road.domain.RoadSegment;
 import com.civicos.user.domain.User;
 import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
@@ -116,6 +120,49 @@ public class Intervention extends AbstractAuditableEntity {
 	@Column(nullable = false)
 	private long version;
 
+	protected Intervention() {
+	}
+
+	public static Intervention create(
+			String interventionNumber,
+			CivicCase civicCase,
+			Agency agency,
+			Type type,
+			String description,
+			RoadSegment roadSegment,
+			Geometry geometry,
+			Instant plannedStart,
+			Instant plannedEnd,
+			Priority priority,
+			User createdBy) {
+		Intervention intervention = new Intervention();
+		intervention.interventionNumber = ValidationRules.requiredText(
+				interventionNumber, "Intervention number");
+		intervention.createdBy = ValidationRules.required(createdBy, "Created by");
+		intervention.applyDraftDetails(
+				civicCase, agency, type, description, roadSegment,
+				geometry, plannedStart, plannedEnd, priority);
+		return intervention;
+	}
+
+	public void updateDraft(
+			CivicCase civicCase,
+			Agency agency,
+			Type type,
+			String description,
+			RoadSegment roadSegment,
+			Geometry geometry,
+			Instant plannedStart,
+			Instant plannedEnd,
+			Priority priority) {
+		if (status != Status.DRAFT) {
+			throw new DomainConflictException("Only a DRAFT intervention can be edited directly.");
+		}
+		applyDraftDetails(
+				civicCase, agency, type, description, roadSegment,
+				geometry, plannedStart, plannedEnd, priority);
+	}
+
 	public String getInterventionNumber() { return interventionNumber; }
 	public CivicCase getCivicCase() { return civicCase; }
 	public Agency getAgency() { return agency; }
@@ -146,5 +193,29 @@ public class Intervention extends AbstractAuditableEntity {
 				// The remaining transitions do not alter execution timestamps.
 			}
 		}
+	}
+
+	private void applyDraftDetails(
+			CivicCase civicCase,
+			Agency agency,
+			Type type,
+			String description,
+			RoadSegment roadSegment,
+			Geometry geometry,
+			Instant plannedStart,
+			Instant plannedEnd,
+			Priority priority) {
+		this.civicCase = ValidationRules.required(civicCase, "Civic case");
+		this.agency = ValidationRules.required(agency, "Agency");
+		this.type = ValidationRules.required(type, "Intervention type");
+		this.description = ValidationRules.requiredText(description, "Intervention description");
+		this.roadSegment = ValidationRules.required(roadSegment, "Road segment");
+		this.geometry = GeometryRules.validWgs84(geometry, "Intervention geometry");
+		this.plannedStart = ValidationRules.required(plannedStart, "Planned start");
+		this.plannedEnd = ValidationRules.required(plannedEnd, "Planned end");
+		if (!plannedEnd.isAfter(plannedStart)) {
+			throw new DomainValidationException("Planned end must be after planned start.");
+		}
+		this.priority = ValidationRules.required(priority, "Intervention priority");
 	}
 }

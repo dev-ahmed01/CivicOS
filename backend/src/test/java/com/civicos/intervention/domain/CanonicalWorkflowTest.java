@@ -1,4 +1,4 @@
-package com.civicos.workflow.domain;
+package com.civicos.intervention.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -8,7 +8,7 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 import com.civicos.casefile.domain.CivicCase;
-import com.civicos.intervention.domain.Intervention;
+import com.civicos.workflow.domain.WorkflowActionNotAllowedException;
 
 class CanonicalWorkflowTest {
 

@@ -108,6 +108,31 @@ public class AuditEvent extends AbstractUuidEntity {
 		return event;
 	}
 
+	public static AuditEvent domainMutation(
+			User actor,
+			String action,
+			String entityType,
+			UUID entityId,
+			Map<String, Object> beforeState,
+			Map<String, Object> afterState,
+			String reason,
+			String requestId) {
+		AuditEvent event = new AuditEvent();
+		event.actor = actor;
+		event.action = action;
+		event.entityType = entityType;
+		event.entityId = entityId;
+		event.beforeState = beforeState == null ? null : new LinkedHashMap<>(beforeState);
+		event.afterState = afterState == null ? null : new LinkedHashMap<>(afterState);
+		event.reason = reason == null || reason.isBlank() ? null : reason.strip();
+		event.requestId = parseUuid(requestId);
+		event.metadata.put("category", "DOMAIN");
+		if (requestId != null) {
+			event.metadata.put("correlationId", requestId);
+		}
+		return event;
+	}
+
 	private static UUID parseUuid(String value) {
 		try {
 			return value == null ? null : UUID.fromString(value);

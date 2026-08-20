@@ -14,8 +14,10 @@ import com.civicos.road.domain.RoadSegment;
 public interface RoadSegmentRepository extends JpaRepository<RoadSegment, UUID> {
 
 	Optional<RoadSegment> findByExternalReference(String externalReference);
+	boolean existsByExternalReference(String externalReference);
 
 	List<RoadSegment> findByActiveTrueOrderByNameAsc();
+	boolean existsByRoadIdAndActiveTrue(UUID roadId);
 
 	@Query(value = """
 			select rs.*
@@ -42,4 +44,16 @@ public interface RoadSegmentRepository extends JpaRepository<RoadSegment, UUID> 
 			@Param("longitude") double longitude,
 			@Param("latitude") double latitude,
 			@Param("radiusMeters") double radiusMeters);
+
+	@Query(value = """
+			select exists (
+			    select 1 from road_segments rs
+			    where rs.id = :roadSegmentId
+			      and rs.active = true
+			      and ST_Intersects(rs.geometry, :geometry)
+			)
+			""", nativeQuery = true)
+	boolean activeSegmentIntersects(
+			@Param("roadSegmentId") UUID roadSegmentId,
+			@Param("geometry") Geometry geometry);
 }
