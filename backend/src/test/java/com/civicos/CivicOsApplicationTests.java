@@ -55,6 +55,7 @@ import com.civicos.ai.domain.AiRun;
 import com.civicos.ai.domain.AiTask;
 import com.civicos.approval.application.ApprovalDecisionCommand;
 import com.civicos.approval.application.ApprovalService;
+import com.civicos.approval.application.ApprovalQueryService;
 import com.civicos.approval.domain.Approval;
 import com.civicos.audit.application.AuditQueryService;
 import com.civicos.auth.security.CivicPrincipal;
@@ -74,9 +75,11 @@ import com.civicos.conflict.application.ConflictResolutionService;
 import com.civicos.conflict.domain.Conflict;
 import com.civicos.dependency.application.CreateDependencyCommand;
 import com.civicos.dependency.application.DependencyManagementService;
+import com.civicos.dependency.application.DependencyQueryService;
 import com.civicos.dependency.domain.Dependency;
 import com.civicos.evidence.application.EvidenceReviewCommand;
 import com.civicos.evidence.application.EvidenceService;
+import com.civicos.evidence.application.EvidenceQueryService;
 import com.civicos.evidence.application.EvidenceUploadCommand;
 import com.civicos.evidence.domain.Evidence;
 import com.civicos.evidence.storage.FileStorageService;
@@ -101,6 +104,7 @@ import com.civicos.road.domain.RoadSegment;
 import com.civicos.road.repository.RoadSegmentRepository;
 import com.civicos.sla.application.CreateSlaCommand;
 import com.civicos.sla.application.SlaService;
+import com.civicos.sla.application.SlaQueryService;
 import com.civicos.sla.application.SlaUrgency;
 import com.civicos.sla.domain.Sla;
 import com.civicos.workflow.application.CaseWorkflowService;
@@ -230,10 +234,22 @@ class CivicOsApplicationTests {
 	private ApprovalService approvalService;
 
 	@Autowired
+	private ApprovalQueryService approvalQueryService;
+
+	@Autowired
 	private SlaService slaService;
 
 	@Autowired
+	private SlaQueryService slaQueryService;
+
+	@Autowired
 	private EvidenceService evidenceService;
+
+	@Autowired
+	private EvidenceQueryService evidenceQueryService;
+
+	@Autowired
+	private DependencyQueryService dependencyQueryService;
 
 	@Autowired
 	private FileStorageService fileStorageService;
@@ -363,6 +379,10 @@ class CivicOsApplicationTests {
 				.andExpect(jsonPath("$.components.schemas.PagedResponseInterventionResponse").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions'].get.parameters").isArray())
 				.andExpect(jsonPath("$.paths['/api/v1/observations/{observationId}/evidence'].post").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/approval-requests'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/evidence'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/dependencies'].get").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/slas'].get").exists())
 				.andExpect(jsonPath("$.paths['/api/v1/interventions/{interventionId}/actions/{action}'].post.responses['409'].content['application/json'].schema['$ref']")
 						.value("#/components/schemas/ApiError"));
 	}
@@ -1021,6 +1041,94 @@ class CivicOsApplicationTests {
 			assertThat(jdbcTemplate.queryForObject(
 					"select status from citizen_observations where id = ?",
 					String.class, observationId)).isEqualTo("RESOLVED");
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+	}
+
+	@Test
+	void agencyReadModelsRemainScopedToAuthoritativeInterventions() {
+		WorkflowFixture own = createWorkflowFixtureAt(
+				"SCHEDULED", "LINESTRING(76.10 13.10, 76.11 13.11)",
+				"2029-05-01T08:00:00Z", "2029-05-03T08:00:00Z", "ELECTRICAL");
+		WorkflowFixture other = createWorkflowFixtureAt(
+				"SCHEDULED", "LINESTRING(76.20 13.20, 76.21 13.21)",
+				"2029-05-04T08:00:00Z", "2029-05-06T08:00:00Z", "WATER");
+		UUID ownApproval = UUID.randomUUID();
+		UUID otherApproval = UUID.randomUUID();
+		UUID ownEvidence = UUID.randomUUID();
+		UUID otherEvidence = UUID.randomUUID();
+		UUID ownSla = UUID.randomUUID();
+		UUID otherSla = UUID.randomUUID();
+		UUID dependencyId = UUID.randomUUID();
+		jdbcTemplate.update(
+				"insert into approvals (id, intervention_id) values (?, ?), (?, ?)",
+				ownApproval, own.interventionId(), otherApproval, other.interventionId());
+		jdbcTemplate.update("""
+				insert into evidence (
+				    id, target_type, target_id, uploaded_by, evidence_type,
+				    file_reference, mime_type, file_size_bytes, metadata, status)
+				values (?, 'INTERVENTION', ?, ?, 'BEFORE_WORK', ?, 'image/png', 12, '{}'::jsonb, 'UPLOADED'),
+				       (?, 'INTERVENTION', ?, ?, 'BEFORE_WORK', ?, 'image/png', 12, '{}'::jsonb, 'UPLOADED')
+				""",
+				ownEvidence, own.interventionId(), own.actorId(), "phase15-" + ownEvidence,
+				otherEvidence, other.interventionId(), other.actorId(), "phase15-" + otherEvidence);
+		jdbcTemplate.update("""
+				insert into sla_instances (
+				    id, target_type, target_id, sla_type, start_at, deadline, status)
+				values (?, 'INTERVENTION', ?, 'EXECUTION', now() - interval '1 hour', now() + interval '2 hours', 'AT_RISK'),
+				       (?, 'INTERVENTION', ?, 'EXECUTION', now() - interval '1 hour', now() + interval '2 hours', 'AT_RISK')
+				""",
+				ownSla, own.interventionId(), otherSla, other.interventionId());
+		jdbcTemplate.update("""
+				insert into dependencies (
+				    id, source_intervention_id, target_intervention_id,
+				    dependency_type, required, status, reason)
+				values (?, ?, ?, 'MUST_COMPLETE_BEFORE', true, 'ACTIVE', 'Phase 15 agency context')
+				""", dependencyId, own.interventionId(), other.interventionId());
+
+		authenticateWorkflowActor(
+				own.actorId(), own.agencyId(), "AGENCY_OFFICER", "APPROVAL_VIEW");
+		try {
+			assertThat(approvalQueryService.list(
+					Approval.Status.PENDING, null, PageRequest.of(0, 20)).getContent())
+					.extracting(item -> item.id())
+					.containsExactly(ownApproval);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				own.actorId(), own.agencyId(), "AGENCY_OFFICER", "EVIDENCE_VIEW");
+		try {
+			assertThat(evidenceQueryService.list(
+					"INTERVENTION", Set.of(own.interventionId(), other.interventionId()),
+					null, PageRequest.of(0, 20)).getContent())
+					.extracting(item -> item.id())
+					.containsExactly(ownEvidence);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				own.actorId(), own.agencyId(), "AGENCY_OFFICER", "SLA_VIEW");
+		try {
+			assertThat(slaQueryService.list(
+					Set.of(Sla.Status.AT_RISK), null, "INTERVENTION",
+					Set.of(own.interventionId(), other.interventionId()), PageRequest.of(0, 20))
+					.getContent())
+					.extracting(item -> item.id())
+					.containsExactly(ownSla);
+		} finally {
+			SecurityContextHolder.clearContext();
+		}
+
+		authenticateWorkflowActor(
+				own.actorId(), own.agencyId(), "AGENCY_OFFICER", "INTERVENTION_VIEW");
+		try {
+			assertThat(dependencyQueryService.forIntervention(own.interventionId()))
+					.extracting(item -> item.id())
+					.containsExactly(dependencyId);
 		} finally {
 			SecurityContextHolder.clearContext();
 		}

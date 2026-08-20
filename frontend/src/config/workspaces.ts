@@ -97,6 +97,14 @@ export function resolveWorkspace(pathname: string): ResolvedWorkspace {
           found: true,
         }
       }
+      if (workspace.role === 'agency' && pathname.startsWith('/app/agency/interventions/')) {
+        return {
+          workspace,
+          route: workspace.routes.find(({ path }) => path === '/app/agency/interventions') ?? workspace.routes[0],
+          requestedPath: pathname,
+          found: true,
+        }
+      }
       return { workspace, route: workspace.routes[0], requestedPath: pathname, found: false }
     }
   }

@@ -68,7 +68,7 @@ public class InterventionController {
 	@GetMapping
 	@Operation(summary = "List interventions", description = "Returns an agency-scoped, bounded collection.")
 	public PagedResponse<InterventionResponse> list(
-			@RequestParam(required = false) Intervention.Status status,
+			@RequestParam(required = false) Set<Intervention.Status> status,
 			@RequestParam(required = false) UUID agencyId,
 			@RequestParam(required = false) UUID roadSegmentId,
 			@RequestParam(required = false) Intervention.Priority priority,

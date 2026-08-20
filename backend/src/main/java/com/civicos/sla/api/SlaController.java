@@ -3,8 +3,10 @@ package com.civicos.sla.api;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -15,8 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.civicos.common.web.ApiIdempotencyService;
 import com.civicos.common.web.CorrelationIdFilter;
+import com.civicos.common.web.PageRequestFactory;
+import com.civicos.common.web.PagedResponse;
 import com.civicos.sla.application.CreateSlaCommand;
 import com.civicos.sla.application.SlaResult;
+import com.civicos.sla.application.SlaQueryService;
 import com.civicos.sla.application.SlaService;
 import com.civicos.sla.application.SlaUrgency;
 import com.civicos.sla.domain.Sla;
@@ -34,11 +39,40 @@ import jakarta.validation.constraints.NotNull;
 public class SlaController {
 
 	private final SlaService slaService;
+	private final SlaQueryService queryService;
 	private final ApiIdempotencyService idempotencyService;
+	private final PageRequestFactory pageRequestFactory;
 
-	public SlaController(SlaService slaService, ApiIdempotencyService idempotencyService) {
+	public SlaController(
+			SlaService slaService,
+			SlaQueryService queryService,
+			ApiIdempotencyService idempotencyService,
+			PageRequestFactory pageRequestFactory) {
 		this.slaService = slaService;
+		this.queryService = queryService;
 		this.idempotencyService = idempotencyService;
+		this.pageRequestFactory = pageRequestFactory;
+	}
+
+	@GetMapping
+	public PagedResponse<SlaResponse> list(
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Set<Sla.Status> status,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Sla.Type slaType,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String targetType,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Set<UUID> targetId,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "0") int page,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "20") int size,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "deadline,asc") String sort,
+			HttpServletRequest request) {
+		return PagedResponse.from(queryService.list(status, slaType, targetType, targetId,
+				pageRequestFactory.create(page, size, sort,
+						Set.of("deadline", "status", "slaType", "startAt"))),
+				CorrelationIdFilter.requestId(request));
+	}
+
+	@GetMapping("/{slaId}")
+	public SlaResponse byId(@PathVariable UUID slaId) {
+		return queryService.byId(slaId);
 	}
 
 	@PostMapping

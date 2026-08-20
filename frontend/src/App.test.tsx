@@ -15,7 +15,7 @@ describe('CivicOS operational shell', () => {
   it('renders role-specific navigation from the route definition', () => {
     render(<App pathname="/app/agency/interventions" />)
 
-    expect(screen.getByRole('heading', { name: 'Interventions' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /move assigned work through governed execution/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Interventions' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('link', { name: 'Conflicts' })).not.toBeInTheDocument()
   })

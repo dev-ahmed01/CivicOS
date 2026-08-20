@@ -2,6 +2,7 @@ package com.civicos.intervention.application;
 
 import java.time.Instant;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
@@ -34,7 +35,7 @@ public class InterventionQueryService {
 
 	@Transactional(readOnly = true)
 	public Page<InterventionResponse> list(
-			Intervention.Status status,
+			Set<Intervention.Status> status,
 			UUID agencyId,
 			UUID roadSegmentId,
 			Intervention.Priority priority,
@@ -46,9 +47,9 @@ public class InterventionQueryService {
 		UUID effectiveAgencyId = scopedAgency(principal, agencyId);
 
 		Specification<Intervention> specification = Specification.allOf();
-		if (status != null) {
+		if (status != null && !status.isEmpty()) {
 			specification = specification.and((root, query, builder) ->
-					builder.equal(root.get("status"), status));
+					root.get("status").in(status));
 		}
 		if (effectiveAgencyId != null) {
 			specification = specification.and((root, query, builder) ->

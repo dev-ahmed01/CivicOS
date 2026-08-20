@@ -3,6 +3,8 @@ import './App.css'
 import { OperationalShell } from './components/layout/OperationalShell'
 import { WorkspacePage } from './components/workflow/WorkspacePage'
 import { resolveWorkspace } from './config/workspaces'
+import { AgencyWorkspace } from './features/agency/AgencyWorkspace'
+import { readAgencyAccessToken } from './features/agency/session'
 import { CitizenWorkspace } from './features/citizen/CitizenWorkspace'
 import { readCitizenAccessToken } from './features/citizen/session'
 
@@ -16,6 +18,9 @@ function App({ pathname = window.location.pathname, accessToken }: AppProps) {
   const [citizenToken, setCitizenToken] = useState<string | null>(() =>
     accessToken === undefined ? readCitizenAccessToken() : accessToken,
   )
+  const [agencyToken, setAgencyToken] = useState<string | null>(() =>
+    accessToken === undefined ? readAgencyAccessToken() : accessToken,
+  )
 
   return (
     <OperationalShell route={route}>
@@ -24,6 +29,12 @@ function App({ pathname = window.location.pathname, accessToken }: AppProps) {
           accessToken={citizenToken}
           route={route}
           onAuthenticated={setCitizenToken}
+        />
+      ) : route.workspace.role === 'agency' ? (
+        <AgencyWorkspace
+          accessToken={agencyToken}
+          route={route}
+          onAuthenticated={setAgencyToken}
         />
       ) : (
         <WorkspacePage route={route} />

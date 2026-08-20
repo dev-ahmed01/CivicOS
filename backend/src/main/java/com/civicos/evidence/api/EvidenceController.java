@@ -8,9 +8,11 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -23,7 +25,10 @@ import org.springframework.web.multipart.MultipartFile;
 import com.civicos.common.domain.DomainValidationException;
 import com.civicos.common.web.ApiIdempotencyService;
 import com.civicos.common.web.CorrelationIdFilter;
+import com.civicos.common.web.PageRequestFactory;
+import com.civicos.common.web.PagedResponse;
 import com.civicos.evidence.application.EvidenceResult;
+import com.civicos.evidence.application.EvidenceQueryService;
 import com.civicos.evidence.application.EvidenceReviewCommand;
 import com.civicos.evidence.application.EvidenceService;
 import com.civicos.evidence.application.EvidenceUploadCommand;
@@ -42,11 +47,38 @@ import jakarta.validation.constraints.NotNull;
 public class EvidenceController {
 
 	private final EvidenceService evidenceService;
+	private final EvidenceQueryService queryService;
 	private final ApiIdempotencyService idempotencyService;
+	private final PageRequestFactory pageRequestFactory;
 
-	public EvidenceController(EvidenceService evidenceService, ApiIdempotencyService idempotencyService) {
+	public EvidenceController(
+			EvidenceService evidenceService,
+			EvidenceQueryService queryService,
+			ApiIdempotencyService idempotencyService,
+			PageRequestFactory pageRequestFactory) {
 		this.evidenceService = evidenceService;
+		this.queryService = queryService;
 		this.idempotencyService = idempotencyService;
+		this.pageRequestFactory = pageRequestFactory;
+	}
+
+	@GetMapping("/evidence")
+	public PagedResponse<EvidenceResponse> list(
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String targetType,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Set<UUID> targetId,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Evidence.Status status,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "0") int page,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "20") int size,
+			@org.springframework.web.bind.annotation.RequestParam(defaultValue = "createdAt,desc") String sort,
+			HttpServletRequest request) {
+		return PagedResponse.from(queryService.list(targetType, targetId, status,
+				pageRequestFactory.create(page, size, sort, Set.of("createdAt", "status", "type"))),
+				CorrelationIdFilter.requestId(request));
+	}
+
+	@GetMapping("/evidence/{evidenceId}")
+	public EvidenceResponse byId(@PathVariable UUID evidenceId) {
+		return queryService.byId(evidenceId);
 	}
 
 	@PostMapping(value = "/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
